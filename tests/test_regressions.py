@@ -213,7 +213,7 @@ class Regressions(unittest.TestCase):
         self.assertEqual(self.hosts.read_bytes(), original)
 
     def test_retired_twitch_cleanup_preserves_foreign_entries_and_other_services(self):
-        from main import _remove_retired_twitch
+        from main import _remove_retired_services
         original = b'# Keep\r\n8.8.8.8 twitch.tv www.twitch.tv # User entry\r\n'
         self.hosts.write_bytes(original)
         self.hm.update_service_ip('Twitch', '1.1.1.1', ['www.twitch.tv', 'gql.twitch.tv'])
@@ -221,7 +221,7 @@ class Regressions(unittest.TestCase):
         self.storage.config.active_routes['twitch'] = {'ip': '1.1.1.1'}
         self.storage.config.active_routes['example'] = {'ip': '9.9.9.9'}
         self.storage.config.favorites.append('twitch')
-        self.assertTrue(_remove_retired_twitch(self.hm, self.storage))
+        self.assertTrue(_remove_retired_services(self.hm, self.storage))
         self.assertEqual(self.hm._split_managed(self.hm.read_file_safely(self.hosts)[0])[1].encode('utf-8'), original)
         self.assertNotIn('DNS Switcher Managed: Twitch', self.hosts.read_text())
         self.assertEqual(self.hm.parse_all_entries()['example.com'], ['9.9.9.9'])
@@ -229,25 +229,60 @@ class Regressions(unittest.TestCase):
         self.assertNotIn('twitch', self.storage.config.favorites)
         self.assertIn('example', self.storage.config.active_routes)
         before = self.hosts.read_bytes()
-        self.assertFalse(_remove_retired_twitch(self.hm, self.storage))
+        self.assertFalse(_remove_retired_services(self.hm, self.storage))
         self.assertEqual(self.hosts.read_bytes(), before)
+
+    def test_all_retired_builtin_routes_are_removed_in_one_backed_up_write(self):
+        from main import _remove_retired_services
+        from core.catalog import RETIRED_SERVICES
+        original = b'# User note\r\n8.8.8.8 user.example # Keep\n'
+        self.hosts.write_bytes(original)
+        kept = Catalog().list_all()
+        for service in kept:
+            self.hm.update_service_ip(service.name, '1.1.1.1', [service.primary_domain])
+            self.storage.config.active_routes[service.id] = {'ip': '1.1.1.1'}
+        for sid, name in RETIRED_SERVICES.items():
+            self.hm.update_service_ip(name, '9.9.9.9', [sid + '.example'])
+            self.storage.config.active_routes[sid] = {'ip': '9.9.9.9'}
+        self.storage.config.favorites += list(RETIRED_SERVICES)
+        before_backups = len(self.hm.list_backups())
+        self.assertTrue(_remove_retired_services(self.hm, self.storage))
+        self.assertEqual(len(self.hm.list_backups()), before_backups + 1)
+        sections, remaining = self.hm._split_managed(self.hm.read_file_safely(self.hosts)[0])
+        self.assertEqual(set(sections), {s.name for s in kept})
+        self.assertEqual(remaining.encode(), original)
+        self.assertEqual(set(self.storage.config.active_routes), {s.id for s in kept})
+        self.assertEqual(set(self.storage.config.favorites), {s.id for s in kept})
+        self.assertFalse(_remove_retired_services(self.hm, self.storage))
+
+    def test_explicit_custom_service_is_preserved_during_catalog_cleanup(self):
+        from main import _remove_retired_services
+        self.storage.config.custom_services = [{'id': 'canva', 'name': 'Canva', 'is_custom': True}]
+        self.storage.config.favorites.append('canva')
+        self.storage.config.active_routes['canva'] = {'ip': '1.1.1.1'}
+        self.hm.update_service_ip('Canva', '1.1.1.1', ['canva.com'])
+        before = self.hosts.read_bytes()
+        self.assertFalse(_remove_retired_services(self.hm, self.storage))
+        self.assertEqual(before, self.hosts.read_bytes())
+        self.assertIn('canva', self.storage.config.favorites)
+        self.assertIn('canva', self.storage.config.active_routes)
 
     def test_catalog_focus_and_stable_priority(self):
         services = Catalog().list_all()
-        self.assertEqual(len(services), 19)
-        self.assertEqual([s.id for s in services[:4]], ['chatgpt', 'gemini', 'claude', 'elevenlabs'])
-        self.assertEqual({s.id for s in Catalog().list_favorites()}, {'spotify', 'chatgpt', 'gemini', 'claude'})
+        self.assertEqual(len(services), 3)
+        self.assertEqual([s.id for s in services], ['chatgpt', 'gemini', 'spotify'])
+        self.assertEqual({s.id for s in Catalog().list_favorites()}, {'spotify', 'chatgpt', 'gemini'})
         self.assertTrue({'steam', 'ea', 'battlenet', 'epicgames', 'xbox', 'playstation', 'twitter', 'youtube', 'discord', 'twitch', 'opencode', 'windsurf', 'disneyplus', 'paramountplus'}.isdisjoint({s.id for s in services}))
         self.assertEqual(len({s.id for s in services}), len(services))
-        self.assertEqual(sum(s.category == 'Нейросети' for s in services), 14)
-        self.assertEqual(sum(s.category == 'Музыка, видео и общение' for s in services), 5)
+        self.assertEqual(sum(s.category == 'Нейросети' for s in services), 2)
+        self.assertEqual(sum(s.category == 'Музыка, видео и общение' for s in services), 1)
 
     def test_existing_favorites_migrate_once_without_changing_routes(self):
         import json
         self.storage.config_path.write_text(json.dumps(dict(favorites=['claude', 'spotify'],
             active_routes={'chatgpt': {'ip': '1.1.1.1'}}, monitoring_enabled=False)))
         migrated = StorageManager(str(self.storage.data_dir))
-        self.assertEqual(migrated.config.favorites, ['spotify', 'chatgpt', 'gemini', 'claude'])
+        self.assertEqual(migrated.config.favorites, ['spotify', 'chatgpt', 'gemini'])
         self.assertEqual(migrated.config.active_routes['chatgpt']['ip'], '1.1.1.1')
         migrated.config.favorites.append('elevenlabs')
         migrated.save_config()
@@ -490,16 +525,15 @@ class Regressions(unittest.TestCase):
             favorites=['spotify'], minimize_to_tray=False)))
         migrated = StorageManager(str(self.storage.data_dir))
         self.assertTrue(migrated.config.minimize_to_tray)
-        self.assertEqual(migrated.config.favorites, ['spotify', 'claude'])
+        self.assertEqual(migrated.config.favorites, ['spotify'])
 
-    def test_claude_is_restored_once_for_existing_users(self):
+    def test_upgrade_does_not_restore_an_unconfirmed_service(self):
         import json
         self.storage.config_path.write_text(json.dumps(dict(catalog_revision=4,
             favorites=['spotify'], hidden_services=['claude', 'netflix'])))
         migrated = StorageManager(str(self.storage.data_dir))
-        self.assertEqual(migrated.config.favorites, ['spotify', 'claude'])
-        self.assertEqual(migrated.config.hidden_services, ['netflix'])
-        migrated.config.favorites.remove('claude')
+        self.assertEqual(migrated.config.favorites, ['spotify'])
+        self.assertEqual(migrated.config.hidden_services, ['claude', 'netflix'])
         migrated.save_config()
         self.assertNotIn('claude', StorageManager(str(self.storage.data_dir)).config.favorites)
 

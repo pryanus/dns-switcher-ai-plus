@@ -396,16 +396,21 @@ class HostsManager:
         return self.update_multiple_services([dict(service_name=service_name,
             target_ip=target_ip, domains=domains, provider_name=provider_name)])
 
-    @locked
     def remove_service_entries(self, service_name, domains):
-        """Убирает только записи программы, не удаляет пользовательские строки."""
+        return self.remove_services_entries([service_name])
+
+    @locked
+    def remove_services_entries(self, service_names):
+        """Удаляет выбранные блоки программы одной записью, сохраняя исходные строки."""
         if not self.hosts_path.exists():
             return False
         content, encoding = self.read_file_safely(self.hosts_path)
         sections, original = self._split_managed(content)
-        if service_name not in sections:
+        removed = set(service_names).intersection(sections)
+        if not removed:
             return False
-        sections.pop(service_name)
+        for name in removed:
+            sections.pop(name)
         self.create_backup(tag='remove')
         self._write_managed(sections, original, encoding)
         return True

@@ -16,24 +16,26 @@ from PySide6.QtWidgets import QApplication
 
 from core.storage import StorageManager
 from core.hosts_manager import HostsManager
-from core.catalog import Catalog, ServiceDef
+from core.catalog import Catalog, ServiceDef, RETIRED_SERVICES
 from providers.manager import ProviderManager
 from providers.custom import CustomProvider
 from ui.main_window import MainWindow
 
 
-def _remove_retired_twitch(hosts_manager, storage):
-    # Удаляем только собственный блок; сторонние записи Twitch сохраняются.
-    removed = hosts_manager.remove_service_entries('Twitch', [])
+def _remove_retired_services(hosts_manager, storage):
     config = storage.config
-    changed = removed or 'twitch' in config.active_routes or 'twitch' in config.rejected_routes
-    changed = changed or 'twitch' in config.favorites or 'twitch' in config.hidden_services
-    changed = changed or any(s.get('id') == 'twitch' for s in config.custom_services)
-    config.active_routes.pop('twitch', None)
-    config.rejected_routes.pop('twitch', None)
-    config.favorites = [sid for sid in config.favorites if sid != 'twitch']
-    config.hidden_services = [sid for sid in config.hidden_services if sid != 'twitch']
-    config.custom_services = [s for s in config.custom_services if s.get('id') != 'twitch']
+    # Явно добавленные пользователем сервисы не относятся к стандартному каталогу.
+    custom_ids = {service.get('id') for service in config.custom_services}
+    retired = {sid: name for sid, name in RETIRED_SERVICES.items() if sid not in custom_ids}
+    removed = hosts_manager.remove_services_entries(retired.values())
+    changed = removed or bool(set(config.active_routes).intersection(retired))
+    changed = changed or bool(set(config.rejected_routes).intersection(retired))
+    changed = changed or bool(set(config.favorites).intersection(retired))
+    changed = changed or bool(set(config.hidden_services).intersection(retired))
+    config.active_routes = {sid: route for sid, route in config.active_routes.items() if sid not in retired}
+    config.rejected_routes = {sid: ips for sid, ips in config.rejected_routes.items() if sid not in retired}
+    config.favorites = [sid for sid in config.favorites if sid not in retired]
+    config.hidden_services = [sid for sid in config.hidden_services if sid not in retired]
     if changed:
         storage.save_config()
     return removed
@@ -90,11 +92,11 @@ def main():
     backup_dir = str(storage.data_dir / "backups")
     hosts_mgr = HostsManager(hosts_path=args.hosts_path, backup_dir=backup_dir)
     try:
-        _remove_retired_twitch(hosts_mgr, storage)
+        _remove_retired_services(hosts_mgr, storage)
     except (OSError, ValueError) as error:
         from PySide6.QtWidgets import QMessageBox
-        QMessageBox.warning(None, 'Очистка Twitch',
-                            'Не удалось удалить старые записи Twitch из hosts: ' + str(error))
+        QMessageBox.warning(None, 'Очистка старых маршрутов',
+                            'Не удалось удалить маршруты исключённых сервисов из hosts: ' + str(error))
 
     # 3. Initialize ProviderManager
     cache_dir = str(storage.data_dir / "cache")
