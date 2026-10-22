@@ -1,0 +1,15 @@
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.codegraph/
+data/
+build/
+dist/
+backups/
+*.exe
+*.spec
+*.log
+.env
+.env.*
+.codex/

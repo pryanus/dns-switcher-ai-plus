@@ -1,0 +1,326 @@
+"""Параллельный подбор с отменой и проверкой критичных узлов сервиса."""
+import socket
+import time
+from datetime import datetime, timedelta
+from threading import Event
+from PySide6.QtCore import QThread, Signal, Qt
+from core.network import Cancellation, Cancelled, parallel
+from core.service_checks import checks_for, account_note
+from core.verifier import ServiceVerifier, ServiceStatus, VerificationResult
+from providers.base import CandidateIP
+
+
+class VerificationWorker(QThread):
+    progress = Signal(int, int, str)
+    service_result = Signal(str, object, str)
+    candidates_ready = Signal(str, list)
+    finished_batch = Signal(dict)
+    error_occurred = Signal(str)
+
+    def __init__(self, services, hosts_manager, provider_manager, storage,
+                 auto_fix=False, parent=None, forced=None):
+        super().__init__(parent)
+        self.services, self.hosts_manager = services, hosts_manager
+        self.provider_manager, self.storage = provider_manager, storage
+        self.auto_fix, self.forced = auto_fix, forced
+        self.cancellation = Cancellation()
+        self._is_cancelled = False
+
+    def cancel(self):
+        self._is_cancelled = True
+        self.cancellation.cancel()
+
+    def _probe(self, ip, domain, path='/', accepted_codes=()):
+        self.cancellation.check()
+        return ServiceVerifier.verify_candidate(ip, domain, path=path, timeout=2.5,
+            cancellation=self.cancellation, accepted_codes=accepted_codes)
+
+    def run(self):
+        summary = dict(ok=0, fixed=0, failed=0, total=0, cancelled=False)
+        acquired = False
+        try:
+            while not acquired:
+                self.cancellation.check()
+                acquired = self.provider_manager.operation_lock.acquire(timeout=.05)
+            for idx, service in enumerate(self.services):
+                self.cancellation.check()
+                if service.id in self.storage.config.hidden_services:
+                    continue
+                self.progress.emit(idx + 1, len(self.services), service.name)
+                self._check_service(service, summary)
+                summary['total'] += 1
+        except Cancelled:
+            pass
+        except Exception as error:
+            self.error_occurred.emit(str(error))
+        finally:
+            self.cancellation.cancel()
+            if acquired:
+                self.provider_manager.operation_lock.release()
+            summary['cancelled'] = self._is_cancelled
+            self.finished_batch.emit(summary)
+
+    def _resolve(self, domain):
+        try:
+            return list(dict.fromkeys(item[4][0] for item in socket.getaddrinfo(
+                domain, 443, type=socket.SOCK_STREAM)))[:2]
+        except OSError:
+            return []
+
+    def _domain_route(self, check, selected, entries, current=False, required=True):
+        domain, path, label, codes = check
+        self.cancellation.check()
+        provider_name = selected.provider_name
+        names = {}
+        if current:
+            ips = entries.get(domain, []) or self._resolve(domain)
+        else:
+            provider = self.provider_manager.get_provider(selected.provider_id)
+            ips = [c.ip for c in provider.fetch_candidates(domain)] if provider else [selected.ip]
+            if not ips and required:
+                alternatives = self.provider_manager.get_candidates(domain, self.cancellation)
+                ips = [c.ip for c in alternatives[:2]]
+                if alternatives:
+                    provider_name = alternatives[0].provider_name
+                    names = {c.ip: c.provider_name for c in alternatives}
+        ips = list(dict.fromkeys(ips))[:2]
+        if not ips:
+            return dict(domain=domain, label=label, ok=False, details='Нет адреса у провайдера')
+        probes = parallel(ips, lambda ip: self._probe(ip, domain, path, codes),
+                          self.cancellation, timeout=2.8, limit=2)
+        good = next((r for r in probes if r and r.is_routable), None)
+        last = good or next((r for r in probes if r), None)
+        return dict(domain=domain, label=label, ok=bool(good), ip=good.ip if good else '',
+                    provider=names.get(good.ip, provider_name) if good else provider_name,
+                    details=last.details if last else 'Тайм-аут',
+                    challenge=bool(good and good.status == ServiceStatus.PARTIAL))
+
+    def _check_service(self, service, summary):
+        if service.routing_mode != 'geo':
+            result = VerificationResult('', service.primary_domain, ServiceStatus.PARTIAL, 0, service.description)
+            result.applied = False
+            result.confirmable = False
+            self.service_result.emit(service.id, result, '')
+            summary['failed'] += 1
+            return
+        deadline = time.monotonic() + 24
+        entries = self.hosts_manager.get_service_current_ips(service.domains)
+        current_ips = entries.get(service.primary_domain, [])
+        current_ip = current_ips[0] if current_ips else ''
+        checks = checks_for(service)
+        primary = next((c for c in checks if c[0] == service.primary_domain),
+                       (service.primary_domain, service.test_path, 'Приложение', ()))
+        rejected = set(self.storage.config.rejected_routes.get(service.id, []))
+        # Подбор всегда перебирает провайдеров: рабочая витрина не доказывает работу приложения.
+        if self.forced:
+            candidates = [CandidateIP(self.forced[0], 'manual', self.forced[1])]
+        elif not self.auto_fix:
+            resolved = parallel([service.primary_domain], self._resolve,
+                                self.cancellation, timeout=1.5)[0] if not current_ips else current_ips
+            candidates = [CandidateIP(ip, 'current', 'Из hosts' if current_ip else 'Системный DNS')
+                          for ip in (resolved or [])]
+        else:
+            candidates = self.provider_manager.get_candidates(service.primary_domain, self.cancellation)
+        candidates = [c for c in candidates if c.ip not in rejected]
+        results = parallel(candidates, lambda c: self._probe(c.ip, primary[0], primary[1], primary[3]),
+                           self.cancellation, timeout=3.0, limit=12)
+        checked = []
+        viable = []
+        for candidate, probe in zip(candidates, results):
+            checked.append(dict(ip=candidate.ip, provider_name=candidate.provider_name,
+                status=probe.status.value if probe else 'DEAD', latency_ms=probe.latency_ms if probe else 0,
+                details=probe.details if probe else 'Тайм-аут', routable=bool(probe and probe.is_routable)))
+            if probe and probe.is_routable:
+                viable.append((candidate, probe))
+        # Приоритет: ответ без браузерной защиты, затем задержка.
+        viable.sort(key=lambda item: (item[1].status != ServiceStatus.OK, item[1].latency_ms))
+        selected = best = report = None
+        failure_report = []
+        for candidate, probe in viable[:3]:
+            self.cancellation.check()
+            if time.monotonic() >= deadline - 2:
+                break
+            self.progress.emit(self.services.index(service) + 1, len(self.services),
+                               service.name + ': вход, API, файлы — ' + candidate.provider_name)
+            current = candidate.provider_id == 'current'
+            other_checks = [check for check in checks if check[0] != service.primary_domain]
+            reports = parallel(other_checks, lambda check: self._domain_route(check, candidate, entries, current),
+                               self.cancellation, timeout=min(7.5, max(.1, deadline - time.monotonic())), limit=8)
+            reports = [r or dict(domain=c[0], label=c[2], ok=False, details='Тайм-аут')
+                       for c, r in zip(other_checks, reports)]
+            reports.insert(0, dict(domain=service.primary_domain, label=primary[2], ok=True,
+                ip=candidate.ip, provider=candidate.provider_name, details=probe.details,
+                challenge=probe.status == ServiceStatus.PARTIAL))
+            failure_report = reports
+            if all(r['ok'] for r in reports):
+                selected, best, report = candidate, probe, reports
+                break
+            for row in checked:
+                if row['ip'] == candidate.ip:
+                    row['routable'] = False
+                    row['status'] = 'DEAD'
+                    row['details'] = '; '.join(r['domain'] + ': ' + r['details'] for r in reports if not r['ok'])
+        self.cancellation.check()
+        self.candidates_ready.emit(service.id, checked)
+        if selected is None:
+            details = 'Маршрут с доступом ко всем критичным узлам не найден. Hosts не изменён.'
+            if rejected:
+                details += ' Ранее отклонённые адреса пропущены; сброс доступен в деталях.'
+            if failure_report:
+                details += '\n' + '\n'.join(r['label'] + ' (' + r['domain'] + '): ' +
+                    ('HTTPS доступен' if r['ok'] else r['details']) for r in failure_report)
+            result = VerificationResult(current_ip, service.primary_domain, ServiceStatus.DEAD, 0, details)
+            result.applied = False
+            result.confirmable = False
+            old_route = self.storage.get_active_route(service.id)
+            if old_route:
+                old_route.update(status='DEAD', confirmed=False, confirmable=False, details=details)
+                self.storage.save_config()
+            self.service_result.emit(service.id, result, '')
+            summary['failed'] += 1
+            return
+
+        mappings = {r['domain']: r['ip'] for r in report}
+        if self.auto_fix:
+            extra = [d for d in service.domains if d not in mappings]
+            # Базы провайдеров могут пополняться новыми точными именами хранилищ файлов.
+            if service.id == 'chatgpt':
+                provider = self.provider_manager.get_provider(selected.provider_id)
+                known = getattr(provider, 'supported_domains', []) if provider else []
+                extra += [d for d in known if d.endswith(('.oaiusercontent.com', '.oaistatic.com'))
+                          and d not in mappings and d not in extra]
+            extra.sort(key=lambda d: (0 if 'oaiusercontent.com' in d else
+                1 if any(part in d for part in ('cdn.', 'static', 'assets.', 'auth.', 'api.')) else 2, d))
+            self.progress.emit(self.services.index(service) + 1, len(self.services), service.name + ': ресурсы и CDN')
+            extras = parallel(extra, lambda d: self._domain_route((d, '/', d, (401, 404, 302, 307)),
+                selected, entries, required=False), self.cancellation,
+                timeout=min(7, max(.1, deadline - time.monotonic())), limit=8)
+            for row in extras:
+                if row and row['ok']:
+                    mappings[row['domain']] = row['ip']
+            report += [row or dict(domain=domain, label=domain, ok=False,
+                                   details='Не подтверждён за отведённое время')
+                       for domain, row in zip(extra, extras)]
+            self.cancellation.check()
+            if service.id in self.storage.config.hidden_services:
+                return
+            self.progress.emit(self.services.index(service) + 1, len(self.services),
+                               service.name + ': запись hosts · при запросе подтвердите UAC')
+            self.hosts_manager.update_multiple_services([dict(service_name=service.name,
+                target_ip=selected.ip, domains=list(mappings), domain_ips=mappings,
+                provider_name=selected.provider_name)])
+        old = self.storage.get_active_route(service.id) or {}
+        confirmed = bool(old.get('confirmed') and old.get('domain_ips') == mappings and
+                         old.get('ip') == selected.ip)
+        conflicts = self.hosts_manager.get_conflicts(mappings)
+        best.status = ServiceStatus.OK if confirmed and not conflicts else ServiceStatus.PARTIAL
+        best.applied = self.auto_fix
+        best.is_current = not self.auto_fix
+        best.confirmable = (self.auto_fix or bool(current_ip)) and not bool(conflicts)
+        best.details = '\n'.join(r['label'] + ': ' + ('HTTPS доступен' if r['ok'] else r['details']) +
+            ' · ' + r.get('provider', selected.provider_name) for r in report)
+        best.details += '\n' + account_note(service.id)
+        if conflicts:
+            best.details += '\nКонфликт с другими строками hosts: ' + ', '.join(conflicts) + '. Приоритет IP не гарантирован.'
+        if self.auto_fix or current_ip:
+            self.storage.set_active_route(service.id, selected.ip, selected.provider_name,
+                                          best.status.value, best.latency_ms)
+            route = self.storage.get_active_route(service.id)
+            route.update(domain_ips=mappings, details=best.details, confirmed=confirmed,
+                         checks=report, confirmable=not bool(conflicts))
+            self.storage.save_config()
+        self.service_result.emit(service.id, best, selected.provider_name)
+        summary['fixed' if self.auto_fix else 'ok'] += 1
+
+
+class DatabaseUpdateWorker(QThread):
+    completed = Signal(dict)
+
+    def __init__(self, provider_manager, storage, parent=None):
+        super().__init__(parent)
+        self.provider_manager, self.storage = provider_manager, storage
+        self.cancellation = Cancellation()
+
+    def cancel(self):
+        self.cancellation.cancel()
+
+    def run(self):
+        try:
+            self._update()
+        except Cancelled:
+            self.completed.emit({})
+        except Exception:
+            self.completed.emit({p.id: False for p in self.provider_manager.list_providers() if p.enabled})
+
+    def _update(self):
+        acquired = False
+        try:
+            while not acquired:
+                self.cancellation.check()
+                acquired = self.provider_manager.operation_lock.acquire(timeout=.05)
+            results = self.provider_manager.update_all_databases(self.cancellation)
+            if any(results.values()):
+                self.storage.config.last_db_update = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                self.storage.save_config()
+        finally:
+            if acquired:
+                self.provider_manager.operation_lock.release()
+        self.completed.emit(results)
+
+
+class BackgroundMonitorThread(QThread):
+    service_alert = Signal(str, str, str)
+
+    def __init__(self, catalog, hosts_manager, provider_manager, storage, parent=None):
+        super().__init__(parent)
+        self.catalog, self.hosts_manager = catalog, hosts_manager
+        self.provider_manager, self.storage = provider_manager, storage
+        self._stop = Event()
+        self._worker = None
+        self._next_check = 0
+        self._next_update = 0
+
+    def stop(self):
+        self._stop.set()
+        if self._worker:
+            self._worker.cancel()
+
+    def run(self):
+        while not self._stop.is_set():
+            try:
+                self._tick()
+            except Exception as error:
+                self.service_alert.emit('Мониторинг', 'Ошибка', str(error))
+            self._stop.wait(1)
+
+    def _tick(self):
+        config = self.storage.config
+        if config.auto_update_db and time.monotonic() >= self._next_update:
+            try:
+                due = datetime.fromisoformat(config.last_db_update) + timedelta(hours=config.auto_update_interval_hours)
+            except ValueError:
+                due = datetime.min
+            if datetime.now() >= due and self.provider_manager.operation_lock.acquire(blocking=False):
+                try:
+                    token = Cancellation()
+                    token.event = self._stop
+                    results = parallel([None], lambda _: self.provider_manager.update_all_databases(),
+                                       token, timeout=12)
+                    if results[0] and any(results[0].values()):
+                        config.last_db_update = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                        self.storage.save_config()
+                except Cancelled:
+                    return
+                finally:
+                    self.provider_manager.operation_lock.release()
+            self._next_update = time.monotonic() + 300
+        if config.monitoring_enabled and time.monotonic() >= self._next_check and not self._stop.is_set():
+            self._worker = VerificationWorker(self.catalog.list_favorites(), self.hosts_manager,
+                self.provider_manager, self.storage, config.auto_fix_favorites)
+            self._worker.service_result.connect(lambda sid, result, provider:
+                self.service_alert.emit(sid, result.status.value, result.details), Qt.DirectConnection)
+            if self._stop.is_set():
+                self._worker.cancel()
+            self._worker.run()
+            self._worker = None
+            self._next_check = time.monotonic() + max(60, config.monitor_interval_minutes * 60)
