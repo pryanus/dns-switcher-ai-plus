@@ -46,8 +46,8 @@ class MainWindow(QMainWindow):
         self._exiting = False
         self._session_results = {}
 
-        from core.updater import VERSION, BUILD
-        self.setWindowTitle(f'DNS Switcher AI+ {VERSION} · сборка {BUILD}')
+        from core.updater import VERSION
+        self.setWindowTitle(f'DNS Switcher AI+ {VERSION}')
         self.resize(780, 790)
         self.setMinimumSize(640, 580)
 
@@ -93,8 +93,8 @@ class MainWindow(QMainWindow):
         title_box.setSpacing(1)
         self.title_lbl = QLabel("DNS Switcher AI+", self)
         self.title_lbl.setStyleSheet("font-size: 25px; font-weight: 600; color: #f0f0f2;")
-        from core.updater import VERSION, BUILD
-        self.sub_lbl = QLabel(f'Версия {VERSION} · сборка {BUILD}', self)
+        from core.updater import VERSION
+        self.sub_lbl = QLabel(f'Версия {VERSION}', self)
         self.sub_lbl.setStyleSheet("font-size: 14px; color: #aaaab2;")
         title_box.addWidget(self.title_lbl)
         title_box.addWidget(self.sub_lbl)

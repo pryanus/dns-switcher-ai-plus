@@ -16,8 +16,7 @@ import httpx
 from PySide6.QtCore import QThread, Signal
 from core.network import Cancellation, Cancelled
 
-VERSION = '1.1.0'
-BUILD = 3
+VERSION = '1.0.0'
 REPOSITORY = 'pryanus/dns-switcher-ai-plus'
 ASSET_NAME = 'DNS_Switcher_AI_Plus.exe'
 API_URL = f'https://api.github.com/repos/{REPOSITORY}/releases/latest'
