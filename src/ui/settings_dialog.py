@@ -73,6 +73,10 @@ class SettingsDialog(QDialog):
         self._init_app_update_tab(app_tab)
         tabs.addTab(app_tab, 'Обновление')
         main_layout.addWidget(tabs)
+        self.reset_all_dns_btn = QPushButton('Сбросить DNS всех сервисов', self)
+        self.reset_all_dns_btn.setToolTip('Удалить только блоки DNS Switcher. Все исходные записи hosts сохраняются.')
+        self.reset_all_dns_btn.clicked.connect(self._reset_all_dns)
+        main_layout.addWidget(self.reset_all_dns_btn)
 
         # Bottom buttons
         btn_layout = QHBoxLayout()
@@ -269,10 +273,6 @@ class SettingsDialog(QDialog):
         restore_btn.setCursor(Qt.PointingHandCursor)
         restore_btn.clicked.connect(self._on_restore_backup)
         layout.addWidget(restore_btn)
-        self.reset_all_dns_btn = QPushButton('Сбросить DNS всех сервисов', self)
-        self.reset_all_dns_btn.setToolTip('Удалить только блоки DNS Switcher. Все исходные записи hosts сохраняются.')
-        self.reset_all_dns_btn.clicked.connect(self._reset_all_dns)
-        layout.addWidget(self.reset_all_dns_btn)
 
     def _reset_all_dns(self):
         if not self.provider_manager.operation_lock.acquire(blocking=False):

@@ -122,6 +122,10 @@ class TestUIHeadless(unittest.TestCase):
 
     def test_other_route_keeps_card_and_scroll_position(self):
         from unittest.mock import patch
+        from PySide6.QtTest import QTest
+        from PySide6.QtCore import Qt
+        from core.verifier import VerificationResult, ServiceStatus
+        self.window.resize(640, 580)
         self.window.show()
         self.app.processEvents()
         scroll = self.window.fav_scroll.verticalScrollBar()
@@ -129,11 +133,32 @@ class TestUIHeadless(unittest.TestCase):
         position = scroll.value()
         card = self.window.service_cards['spotify']
         with patch('core.monitor.VerificationWorker.start'):
-            self.window._route_feedback('spotify', 'reject')
+            QTest.mouseClick(card.next_btn, Qt.LeftButton)
             self.app.processEvents()
             self.assertIs(self.window.service_cards['spotify'], card)
             self.assertEqual(scroll.value(), position)
+            result = VerificationResult('8.8.4.4', card.service.primary_domain, ServiceStatus.OK, 10)
+            result.applied = True
+            self.window._on_worker_service_result('spotify', result, 'Alternative')
+            self.window._on_worker_finished(dict(total=1, fixed=1))
             self.window._on_worker_thread_finished()
+            QTest.qWait(30)
+            self.assertEqual(scroll.value(), position)
+
+    def test_reset_buttons_are_visible_without_opening_details_or_switching_settings_tabs(self):
+        from PySide6.QtWidgets import QTabWidget
+        self.window.show()
+        self.app.processEvents()
+        card = self.window.service_cards['spotify']
+        self.assertFalse(card.is_expanded)
+        self.assertTrue(card.restore_dns_btn.isVisible())
+        dialog = SettingsDialog(self.storage, self.hosts_mgr, self.provider_mgr, self.window)
+        dialog.show()
+        for index in range(dialog.findChild(QTabWidget).count()):
+            dialog.findChild(QTabWidget).setCurrentIndex(index)
+            self.app.processEvents()
+            self.assertTrue(dialog.reset_all_dns_btn.isVisible())
+        dialog.accept()
 
     def test_single_and_global_reset_preserve_foreign_hosts_and_other_services(self):
         from unittest.mock import patch

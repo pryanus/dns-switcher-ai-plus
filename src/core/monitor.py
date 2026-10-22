@@ -86,8 +86,9 @@ class VerificationWorker(QThread):
             else:
                 provider = self.provider_manager.get_provider(selected.provider_id)
                 ips = [c.ip for c in provider.fetch_candidates(domain)] if provider else [selected.ip]
-        rejected = self.storage.config.rejected_routes.get(service_id, []) if not current and not self.forced else []
-        ips = [ip for ip in dict.fromkeys(ips) if ip not in rejected][:32]
+        # Пропущенные маршруты относятся к главному домену. Рабочий API/CDN может
+        # иметь тот же IP и остаётся доступным для другого маршрута приложения.
+        ips = list(dict.fromkeys(ips))[:32]
         if not ips:
             return dict(domain=domain, label=label, ok=False, details='Нет адреса у провайдера')
         probes = parallel(ips, lambda ip: self._probe(ip, domain, path, codes),

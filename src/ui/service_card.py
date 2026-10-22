@@ -89,7 +89,10 @@ class ServiceCard(QWidget):
         self.confirm_btn.clicked.connect(lambda: self.route_feedback.emit(service.id, 'confirm'))
         self.next_btn = QPushButton('Другой маршрут')
         self.next_btn.clicked.connect(lambda: self.route_feedback.emit(service.id, 'reject'))
-        for button in (open_btn, self.confirm_btn, self.next_btn):
+        self.restore_dns_btn = QPushButton('Сбросить DNS')
+        self.restore_dns_btn.setToolTip('Удалить только записи DNS Switcher для этого сервиса. Исходные строки hosts сохраняются.')
+        self.restore_dns_btn.clicked.connect(lambda: self.route_feedback.emit(service.id, 'restore_dns'))
+        for button in (open_btn, self.confirm_btn, self.next_btn, self.restore_dns_btn):
             feedback_layout.addWidget(button)
         self.main_layout.addWidget(self.feedback_row)
 
@@ -126,10 +129,6 @@ class ServiceCard(QWidget):
         controls.addWidget(hide_btn)
         controls.addWidget(reset_btn)
         self.detail_layout.addLayout(controls)
-        self.restore_dns_btn = QPushButton('Сбросить DNS сервиса')
-        self.restore_dns_btn.setToolTip('Удалить только записи DNS Switcher. Исходные строки hosts сохраняются.')
-        self.restore_dns_btn.clicked.connect(lambda: self.route_feedback.emit(service.id, 'restore_dns'))
-        self.detail_layout.addWidget(self.restore_dns_btn)
         self.detail_widget.hide()
         self.main_layout.addWidget(self.detail_widget)
         for button in self.findChildren(QPushButton) + self.findChildren(QToolButton):

@@ -105,6 +105,19 @@ class Regressions(unittest.TestCase):
         self.assertEqual(self.hosts.read_bytes(), before)
         self.assertEqual(results[0].route_message, 'Других маршрутов нет')
 
+    def test_rotation_can_keep_the_only_working_api_ip(self):
+        self.hm.update_service_ip('Example', '1.1.1.1', ['example.com', 'api.example.com'])
+        self.storage.config.rejected_routes['example'] = ['1.1.1.1']
+        worker = VerificationWorker([self.service], self.hm, self.providers, self.storage, True, rotate=True)
+        def candidates(domain, cancellation=None):
+            return [CandidateIP('8.8.4.4' if domain == 'example.com' else '1.1.1.1', 'manual', 'Test')]
+        with patch.object(self.providers, 'get_candidates', side_effect=candidates), \
+             patch.object(ServiceVerifier, 'verify_candidate', side_effect=lambda ip, domain, **kw:
+                 self._result(ip, domain, ServiceStatus.OK)):
+            worker.run()
+        self.assertEqual(self.hm.parse_all_entries()['example.com'][0], '8.8.4.4')
+        self.assertEqual(self.hm.parse_all_entries()['api.example.com'], ['1.1.1.1'])
+
     def test_full_route_replacement_drops_only_stale_managed_domains(self):
         original = self.hosts.read_bytes()
         self.hm.update_service_ip('Example', '1.1.1.1', ['example.com', 'old.example'])
@@ -511,7 +524,8 @@ class Regressions(unittest.TestCase):
         self.assertEqual(route['ip'], '8.8.4.4')
         self.assertFalse(route['confirmed'])
         self.assertEqual(route['status'], 'OK')
-        self.assertFalse(any(call.args[0] == '1.1.1.1' for call in probe.call_args_list))
+        self.assertFalse(any(call.args[0] == '1.1.1.1' and call.args[1] == self.service.primary_domain
+                             for call in probe.call_args_list))
         self.assertEqual(set(route['domain_ips']), set(self.service.domains))
 
 

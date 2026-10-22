@@ -46,7 +46,8 @@ class MainWindow(QMainWindow):
         self._exiting = False
         self._session_results = {}
 
-        self.setWindowTitle("DNS Switcher AI+")
+        from core.updater import VERSION, BUILD
+        self.setWindowTitle(f'DNS Switcher AI+ {VERSION} · сборка {BUILD}')
         self.resize(780, 790)
         self.setMinimumSize(640, 580)
 
@@ -92,7 +93,8 @@ class MainWindow(QMainWindow):
         title_box.setSpacing(1)
         self.title_lbl = QLabel("DNS Switcher AI+", self)
         self.title_lbl.setStyleSheet("font-size: 25px; font-weight: 600; color: #f0f0f2;")
-        self.sub_lbl = QLabel("AI-инструменты и любимые сервисы", self)
+        from core.updater import VERSION, BUILD
+        self.sub_lbl = QLabel(f'Версия {VERSION} · сборка {BUILD}', self)
         self.sub_lbl.setStyleSheet("font-size: 14px; color: #aaaab2;")
         title_box.addWidget(self.title_lbl)
         title_box.addWidget(self.sub_lbl)
@@ -409,7 +411,7 @@ class MainWindow(QMainWindow):
         elif action == 'reject':
             actual = self.hosts_manager.get_service_current_ips([service.primary_domain]).get(service.primary_domain, [])
             rejected = self.storage.config.rejected_routes.setdefault(service_id, [])
-            for ip in actual:
+            for ip in actual[:1]:
                 if ip not in rejected:
                     rejected.append(ip)
         self.storage.save_config()
@@ -503,6 +505,11 @@ class MainWindow(QMainWindow):
         if self.active_worker and self.active_worker._is_cancelled:
             return
         previous = self._session_results.get(service_id)
+        service = self.catalog.get_service(service_id)
+        if getattr(result, 'alternative_failed', False):
+            self.note_label.setText(f'{service.name}: другой подходящий маршрут не найден; текущий IP сохранён.')
+        elif getattr(result, 'applied', False):
+            self.note_label.setText(f'{service.name}: применён {prov_name} · {result.ip}')
         if getattr(result, 'alternative_failed', False) and previous and previous[0].status == ServiceStatus.OK:
             card = self.service_cards.get(service_id)
             if card:
