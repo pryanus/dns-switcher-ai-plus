@@ -99,8 +99,8 @@ class HostsManager:
     @staticmethod
     def write_file_safely(path: Path, content: str, encoding: str = "utf-8-sig") -> None:
         """
-        Writes content atomically to path using temporary file.
-        If writing to system path raises PermissionError, requests UAC elevation.
+        Пишет через временный файл; при запрете rename сохраняет существующий файл и ACL.
+        Запрашивает UAC только если процесс ещё не запущен от администратора.
         """
         tmp_dir = tempfile.gettempdir()
         tmp_fd, tmp_path_str = tempfile.mkstemp(dir=tmp_dir, prefix="hosts_sw_", suffix=".tmp")
@@ -110,19 +110,14 @@ class HostsManager:
 
             # Try direct copy first
             try:
-                fd, adjacent = tempfile.mkstemp(dir=path.parent, prefix=".hosts-sw-")
-                os.close(fd)
-                try:
-                    shutil.copyfile(tmp_path_str, adjacent)
-                    os.replace(adjacent, path)
-                finally:
-                    if os.path.exists(adjacent):
-                        os.unlink(adjacent)
+                ElevationHelper.copy_file_direct(tmp_path_str, path)
                 system_hosts = Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32/drivers/etc/hosts"
                 if path.resolve() == system_hosts.resolve():
-                    import subprocess
-                    subprocess.run([str(Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32/ipconfig.exe"), "/flushdns"], capture_output=True, check=True, timeout=3, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+                    ElevationHelper.flush_dns_cache()
             except PermissionError:
+                if ElevationHelper.is_admin():
+                    raise PermissionError('Windows запретила запись hosts: файл занят или защищён. '
+                                          'Повторное повышение прав не требуется; резервная копия сохранена.')
                 # Elevate with UAC
                 success = ElevationHelper.copy_file_elevated(tmp_path_str, str(path), flush_dns=True)
                 if not success:

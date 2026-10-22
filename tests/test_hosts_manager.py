@@ -43,6 +43,36 @@ class TestHostsManager(unittest.TestCase):
         # Verify telegram IP is preserved
         self.assertEqual(entries["t.me"], ["149.154.167.220"])
 
+    @unittest.skipUnless(os.name == 'nt', 'Windows file sharing')
+    def test_write_when_windows_allows_writing_but_denies_replacement(self):
+        import ctypes
+        from ctypes import wintypes
+        kernel = ctypes.WinDLL('kernel32', use_last_error=True)
+        kernel.CreateFileW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD,
+            ctypes.c_void_p, wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE]
+        kernel.CreateFileW.restype = wintypes.HANDLE
+        kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+        # Аналог открытого DNS Client файла: чтение/запись разрешены, удаление/rename — нет.
+        handle = kernel.CreateFileW(str(self.test_hosts), 0x80000000, 3, None, 3, 0x80, None)
+        self.assertNotEqual(handle, ctypes.c_void_p(-1).value)
+        try:
+            self.manager.update_service_ip('Test', '1.1.1.1', ['example.com'])
+            self.assertEqual(self.manager.parse_all_entries()['example.com'], ['1.1.1.1'])
+            self.assertTrue(self.manager.list_backups())
+        finally:
+            kernel.CloseHandle(handle)
+
+    def test_admin_write_failure_does_not_request_elevation_again(self):
+        from unittest.mock import patch
+        before = self.test_hosts.read_bytes()
+        with patch('core.hosts_manager.ElevationHelper.copy_file_direct', side_effect=PermissionError('Denied')), \
+             patch('core.hosts_manager.ElevationHelper.is_admin', return_value=True), \
+             patch('core.hosts_manager.ElevationHelper.copy_file_elevated') as elevate:
+            with self.assertRaisesRegex(PermissionError, 'Повторное повышение прав не требуется'):
+                self.manager.update_service_ip('Test', '1.1.1.1', ['example.com'])
+            elevate.assert_not_called()
+        self.assertEqual(before, self.test_hosts.read_bytes())
+
     def test_backup_and_restore(self):
         original_content = self.test_hosts.read_text(encoding="utf-8", errors="ignore")
         backup_path = self.manager.create_backup(tag="test_backup")

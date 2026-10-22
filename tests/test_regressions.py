@@ -285,6 +285,20 @@ class Regressions(unittest.TestCase):
         self.assertTrue(second.acquire())
         second.close()
 
+    @unittest.skipUnless(os.name == 'nt', 'Windows mutex')
+    def test_mutex_blocks_another_version_even_with_a_different_temp_lock(self):
+        from PySide6.QtCore import QLockFile
+        first, second = SingleInstance(self.tmp.name), SingleInstance(self.tmp.name)
+        second.name += '-other-version'
+        second.lock = QLockFile(str(self.root / 'different-temp.lock'))
+        self.assertTrue(first.acquire())
+        try:
+            self.assertFalse(second.acquire())
+        finally:
+            first.close()
+        self.assertTrue(second.acquire())
+        second.close()
+
     def _result(self, ip, domain, status):
         return VerificationResult(ip, domain, status, 1, 'Mock')
 

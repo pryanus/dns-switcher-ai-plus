@@ -35,6 +35,48 @@ class SHELLEXECUTEINFO(ctypes.Structure):
 
 class ElevationHelper:
     @staticmethod
+    def copy_file_direct(src, dst):
+        """Сначала замена; при запрете переименования — запись с сохранением ACL файла."""
+        import tempfile
+        import shutil
+        payload = Path(src).read_bytes()
+        adjacent = None
+        try:
+            fd, adjacent = tempfile.mkstemp(dir=Path(dst).parent, prefix='.hosts-sw-')
+            os.close(fd)
+            shutil.copyfile(src, adjacent)
+            os.replace(adjacent, dst)
+        except PermissionError:
+            # DNS Client может открыть hosts без FILE_SHARE_DELETE, разрешая запись.
+            with open(dst, 'r+b') as target:
+                original = target.read()
+                try:
+                    target.seek(0)
+                    target.write(payload)
+                    target.truncate()
+                    target.flush()
+                    os.fsync(target.fileno())
+                except OSError:
+                    target.seek(0)
+                    target.write(original)
+                    target.truncate()
+                    target.flush()
+                    os.fsync(target.fileno())
+                    raise
+        finally:
+            if adjacent and os.path.exists(adjacent):
+                os.unlink(adjacent)
+
+    @staticmethod
+    def flush_dns_cache():
+        try:
+            subprocess.run([str(Path(os.environ.get('SystemRoot', r'C:\Windows')) / 'System32/ipconfig.exe'),
+                            '/flushdns'], capture_output=True, check=False, timeout=3,
+                           creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+        except (OSError, subprocess.SubprocessError):
+            pass
+
+    @staticmethod
     def is_admin() -> bool:
         """Returns True if the current process is running with administrative privileges."""
         try:
@@ -56,28 +98,18 @@ class ElevationHelper:
         # Все пути передаются как данные, без интерпретации cmd.exe.
         # If already elevated, copy directly
         if ElevationHelper.is_admin():
-            try:
-                import tempfile
-                fd, adjacent = tempfile.mkstemp(dir=Path(dst).parent, prefix=".hosts-sw-")
-                os.close(fd)
-                try:
-                    shutil.copyfile(src, adjacent)
-                    os.replace(adjacent, dst)
-                finally:
-                    if os.path.exists(adjacent):
-                        os.unlink(adjacent)
-                if flush_dns:
-                    subprocess.run(["ipconfig", "/flushdns"], capture_output=True, check=False)
-                return True
-            except Exception:
-                return False
+            ElevationHelper.copy_file_direct(src, dst)
+            if flush_dns:
+                ElevationHelper.flush_dns_cache()
+            return True
 
         temporary = str(Path(dst).parent / (".hosts-sw-" + __import__('uuid').uuid4().hex))
         flush = " & (Join-Path $env:SystemRoot 'System32\\ipconfig.exe') /flushdns | Out-Null; if ($LASTEXITCODE -ne 0) { exit 2 };" if flush_dns else ""
         script = (
             "$ErrorActionPreference='Stop'; try { "
             f"Copy-Item -LiteralPath {quoted(src)} -Destination {quoted(temporary)} -Force; "
-            f"Move-Item -LiteralPath {quoted(temporary)} -Destination {quoted(dst)} -Force; "
+            f"try {{ Move-Item -LiteralPath {quoted(temporary)} -Destination {quoted(dst)} -Force }} "
+            f"catch {{ Copy-Item -LiteralPath {quoted(src)} -Destination {quoted(dst)} -Force }}; "
             + flush + " exit 0 } catch { exit 1 } finally { "
             f"if (Test-Path -LiteralPath {quoted(temporary)}) {{ Remove-Item -LiteralPath {quoted(temporary)} -Force }} }}"
         )

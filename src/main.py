@@ -43,7 +43,7 @@ def main():
     app.setQuitOnLastWindowClosed(False)
 
     from core.single_instance import SingleInstance
-    instance = SingleInstance((args.hosts_path or "") + (args.data_dir or ""))
+    instance = SingleInstance()
     if not instance.acquire():
         return
     app.aboutToQuit.connect(instance.close)
