@@ -46,7 +46,7 @@ def main():
     parser.add_argument("--hosts-path", type=str, default=None, help="Custom path to hosts file (for testing/mocking)")
     parser.add_argument("--data-dir", type=str, default=None, help="Custom data directory")
     parser.add_argument("--minimized", action="store_true", help="Start minimized to tray")
-    parser.add_argument('--diagnose', action='store_true', help='Read-only Canva/Claude diagnosis')
+    parser.add_argument('--diagnose', action='store_true', help='Read-only Claude/Stitch/Manus diagnosis')
     parser.add_argument('--output', default='dns-diagnostics.json')
     args = parser.parse_args()
     if args.diagnose:

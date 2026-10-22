@@ -207,6 +207,9 @@ class ServiceVerifier:
                 location = next((line.split(b':', 1)[1].strip().decode('ascii', errors='replace')
                                  for line in headers if line.lower().startswith(b'location:')), '')
                 target = urlparse(urljoin('https://' + clean_domain + path, location))
+                if (target.hostname in ('canva.com', 'www.canva.com')
+                        and target.path.rstrip('/') == '/restricted-access'):
+                    return result(ServiceStatus.DEAD, 'Canva restricted-access (Geo-block error)', code)
                 if (redirects and location and target.scheme == 'https' and target.hostname
                         and not target.username and not target.password and target.port in (None, 443)):
                     target_ips = [ip] if target.hostname == clean_domain else (

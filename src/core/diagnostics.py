@@ -1,4 +1,4 @@
-"""Тот же подбор Canva/Claude на временном hosts, без изменения настроек пользователя."""
+"""Тот же подбор Claude/Stitch/Manus на временном hosts, без изменения настроек пользователя."""
 import json
 import os
 from pathlib import Path
@@ -32,7 +32,7 @@ def run(output, data_dir=None):
         report['sources'] = [dict(provider=p.name, enabled=p.enabled, updated=updates.get(p.id),
                                   last_updated=p.last_updated, error=p.last_error)
                              for p in manager.list_providers()]
-        for sid in ('canva', 'claude'):
+        for sid in ('claude', 'stitch', 'manus'):
             service = Catalog().get_service(sid)
             storage = StorageManager(str(root / sid))
             hosts = root / (sid + '-hosts')

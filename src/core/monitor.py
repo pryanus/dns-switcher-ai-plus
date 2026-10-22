@@ -295,8 +295,14 @@ class VerificationWorker(QThread):
                 break
         self.cancellation.check()
         if selected is None:
+            challenges = sum(bool(probe and probe.is_browser_challenge) for probe in results)
             details = ('Других подходящих маршрутов сейчас нет. Текущий адрес сохранён.' if self.rotate else
                        'Проверенные маршруты не отвечают на нужные запросы. Текущий адрес сохранён.')
+            if challenges:
+                details = (f'{challenges} IP отвечают Cloudflare challenge. Автоматический GET не подтверждает '
+                           'доступ в браузере; эти IP не признаны неработающими. Текущий адрес сохранён.')
+            details += '\n' + '\n'.join(dict.fromkeys(
+                probe.ip + ': ' + probe.details for probe in results if probe))
             if rejected:
                 details += ' Ранее отклонённые адреса пропущены; сброс доступен в деталях.'
             if failure_report:
@@ -307,6 +313,9 @@ class VerificationWorker(QThread):
             result.confirmable = bool(current_ip)
             result.alternative_failed = self.rotate
             result.route_message = 'Других маршрутов нет' if self.rotate else 'Подбор без изменений'
+            if challenges:
+                result.route_message = 'Cloudflare: доступ не подтверждён'
+                result.browser_required = True
             result.pool_size = len(pool)
             result.checked_count = sum(probe is not None for probe in results)
             result.skipped_count = len(pool) - result.checked_count

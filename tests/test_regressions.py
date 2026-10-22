@@ -235,12 +235,33 @@ class Regressions(unittest.TestCase):
     def test_catalog_focus_and_stable_priority(self):
         services = Catalog().list_all()
         self.assertEqual(len(services), 19)
-        self.assertEqual([s.id for s in services[:4]], ['chatgpt', 'gemini', 'claude', 'elevenlabs'])
+        self.assertEqual([s.id for s in services[:4]], ['chatgpt', 'gemini', 'claude', 'cursor'])
         self.assertEqual({s.id for s in Catalog().list_favorites()}, {'spotify', 'chatgpt', 'gemini', 'claude'})
         self.assertTrue({'steam', 'ea', 'battlenet', 'epicgames', 'xbox', 'playstation', 'twitter', 'youtube', 'discord', 'twitch', 'opencode', 'windsurf', 'disneyplus', 'paramountplus'}.isdisjoint({s.id for s in services}))
         self.assertEqual(len({s.id for s in services}), len(services))
-        self.assertEqual(sum(s.category == 'Нейросети' for s in services), 14)
-        self.assertEqual(sum(s.category == 'Музыка, видео и общение' for s in services), 5)
+        self.assertEqual(sum(s.category == 'Нейросети' for s in services), 13)
+        self.assertEqual(sum(s.category == 'Музыка, видео и общение' for s in services), 3)
+        self.assertEqual(sum(s.category == 'Перевод и продуктивность' for s in services), 3)
+        self.assertTrue({'canva', 'deezer', 'sora', 'elevenlabs'}.isdisjoint({s.id for s in services}))
+        self.assertTrue({'deepl', 'make', 'grok', 'framer'}.issubset({s.id for s in services}))
+
+    def test_canva_restricted_redirect_is_a_geoblock(self):
+        with patch('socket.socket'), patch('ssl.create_default_context') as context:
+            context.return_value.wrap_socket.return_value.recv.return_value = b'HTTP/1.1 302 Found\r\nLocation: https://www.canva.com/restricted-access/\r\n\r\n'
+            result = ServiceVerifier.verify_candidate('1.1.1.1', 'canva.com')
+        self.assertEqual(result.category, 'GEO_BLOCK')
+        self.assertFalse(result.is_routable)
+
+    def test_retired_catalog_cleanup_preserves_foreign_canva_and_active_claude(self):
+        from main import _remove_retired_services
+        original = b'8.8.8.8 canva.com # User entry\n'
+        self.hosts.write_bytes(original)
+        self.hm.update_service_ip('Canva', '1.1.1.1', ['www.canva.com'])
+        self.hm.update_service_ip('Claude (Anthropic)', '9.9.9.9', ['claude.ai'])
+        self.assertTrue(_remove_retired_services(self.hm, self.storage))
+        self.assertEqual(self.hm.parse_all_entries()['claude.ai'], ['9.9.9.9'])
+        self.assertEqual(self.hm.parse_all_entries()['canva.com'], ['8.8.8.8'])
+        self.assertNotIn('www.canva.com', self.hm.parse_all_entries())
 
     def test_existing_favorites_migrate_once_without_changing_routes(self):
         import json
