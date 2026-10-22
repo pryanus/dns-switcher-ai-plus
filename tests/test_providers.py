@@ -12,6 +12,28 @@ from providers.manager import ProviderManager
 
 
 class TestProviders(unittest.TestCase):
+    def test_builtin_catalog_is_backed_by_published_provider_lists(self):
+        import json
+        from core.catalog import Catalog
+        from core.validation import parse_hosts
+        assets = Path(__file__).resolve().parents[1] / 'src/assets'
+        known = set(parse_hosts((assets / 'malw_hosts.txt').read_text(encoding='utf-8')))
+        for region in ('ru', 'eu', 'us'):
+            known.update(parse_hosts((assets / f'geohide_{region}.txt').read_text(encoding='utf-8')))
+        declared = {row['name'].casefold() for row in json.loads((assets / 'zapret_services.json').read_text(encoding='utf-8'))}
+        aliases = {'sora': 'chatgpt & sora (openai)', 'twitch': 'twitch'}
+        for service in Catalog().list_all():
+            self.assertTrue(service.primary_domain in known or aliases.get(service.id) in declared, service.id)
+
+    def test_full_geohide_pool_and_google_fallback_are_available(self):
+        manager = ProviderManager()
+        ips = {c.ip for p in manager.list_providers() if p.id.startswith('geohide-')
+               for c in p.fetch_candidates('chatgpt.com')}
+        self.assertGreaterEqual(len(ips), 15)
+        google = manager.get_provider('google-public-dns')
+        self.assertEqual(google.endpoint_or_ip, 'https://dns.google/dns-query')
+        self.assertLess(google.priority, manager.get_provider('dns-ai').priority)
+
     def test_geohide_regional_candidates(self):
         p_ru = GeoHideProvider(region="RU")
         p_eu = GeoHideProvider(region="EU")
@@ -38,7 +60,8 @@ class TestProviders(unittest.TestCase):
         with patch.object(GeoHideProvider, 'fetch_candidates', return_value=[CandidateIP('1.1.1.1', 'geohide-ru', 'GeoHide')]), \
              patch('providers.malw.MalwDnsProvider.fetch_candidates', return_value=[]), \
              patch('providers.zapret.ZapretDnsProvider.fetch_candidates', return_value=[]), \
-             patch('providers.dns_ai.DnsAiProvider.fetch_candidates', return_value=[]):
+             patch('providers.dns_ai.DnsAiProvider.fetch_candidates', return_value=[]), \
+             patch.object(CustomProvider, '_resolve_doh', return_value=[]):
             cands = manager.get_candidates("example.com")
         self.assertTrue(len(cands) > 0)
 

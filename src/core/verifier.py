@@ -57,11 +57,7 @@ class VerificationResult:
 
     @property
     def is_routable(self) -> bool:
-        # Cloudflare может требовать JavaScript при исправном TLS-маршруте.
-        return self.status == ServiceStatus.OK or (
-            self.status == ServiceStatus.PARTIAL and self.stage_reached == 'HTTP'
-            and self.http_code in (200, 403, 503) and 'Cloudflare challenge' in self.details
-        )
+        return self.status == ServiceStatus.OK
 
     def __repr__(self):
         return f"<VerificationResult {self.domain} via {self.ip}: {self.status.value} ({self.latency_ms}ms) - {self.details}>"
@@ -156,6 +152,11 @@ class ServiceVerifier:
             parts = response.split(b"\r\n", 1)[0].split()
             code = int(parts[1]) if len(parts) > 1 and parts[0].startswith(b"HTTP/") and parts[1].isdigit() else None
             lower = response.lower()
+            if any(marker in lower for marker in (
+                    b'our systems have detected unusual traffic', b'/sorry/index',
+                    'наши системы обнаружили необычный трафик'.encode('utf-8'),
+                    'подозрительный трафик'.encode('utf-8'))):
+                return result(ServiceStatus.DEAD, 'CAPTCHA / подозрительный трафик: маршрут отклонён', code)
             if any(sig in lower for sig in cls.BLOCK_SIGNATURES):
                 return result(ServiceStatus.DEAD, "ISP block page detected", code)
             geo = (b"unsupported_country", b"country_not_supported", b"not available in your country",

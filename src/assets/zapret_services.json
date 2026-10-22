@@ -1,0 +1,738 @@
+[
+  {
+    "name": "ChatGPT & Sora (OpenAI)",
+    "ai": true,
+    "names": 52,
+    "relayed": 39,
+    "domain": "chatgpt.com",
+    "icon": "/icons/chatgpt-and-sora-openai.png"
+  },
+  {
+    "name": "Gemini AI",
+    "ai": true,
+    "names": 53,
+    "relayed": 52,
+    "domain": "gemini.google.com",
+    "icon": "/icons/gemini-ai.png"
+  },
+  {
+    "name": "Claude",
+    "ai": true,
+    "names": 52,
+    "relayed": 48,
+    "domain": "claude.ai",
+    "icon": "/icons/claude.png"
+  },
+  {
+    "name": "OpenRouter",
+    "ai": true,
+    "names": 4,
+    "relayed": 4,
+    "domain": "openrouter.ai",
+    "icon": "/icons/openrouter.png"
+  },
+  {
+    "name": "Microsoft (Copilot, Designer, Xbox)",
+    "ai": true,
+    "names": 11,
+    "relayed": 10,
+    "domain": "copilot.microsoft.com",
+    "icon": ""
+  },
+  {
+    "name": "Grok",
+    "ai": true,
+    "names": 27,
+    "relayed": 23,
+    "domain": "grok.com",
+    "icon": "/icons/grok.png"
+  },
+  {
+    "name": "Manus",
+    "ai": true,
+    "names": 3,
+    "relayed": 3,
+    "domain": "manus.im",
+    "icon": "/icons/manus.png"
+  },
+  {
+    "name": "Meta AI",
+    "ai": true,
+    "names": 2,
+    "relayed": 2,
+    "domain": "meta.ai",
+    "icon": "/icons/meta-ai.png"
+  },
+  {
+    "name": "Trae.ai",
+    "ai": true,
+    "names": 4,
+    "relayed": 3,
+    "domain": "trae.ai",
+    "icon": "/icons/trae-ai.png"
+  },
+  {
+    "name": "Windsurf",
+    "ai": true,
+    "names": 10,
+    "relayed": 10,
+    "domain": "windsurf.com",
+    "icon": "/icons/windsurf.png"
+  },
+  {
+    "name": "GitHub Copilot",
+    "ai": true,
+    "names": 1,
+    "relayed": 1,
+    "domain": "github.com",
+    "icon": "/icons/github-copilot.ico"
+  },
+  {
+    "name": "Adobe AI",
+    "ai": true,
+    "names": 2,
+    "relayed": 2,
+    "domain": "adobe.com",
+    "icon": "/icons/adobe-ai.png"
+  },
+  {
+    "name": "Cerebras",
+    "ai": true,
+    "names": 3,
+    "relayed": 3,
+    "domain": "cerebras.ai",
+    "icon": "/icons/cerebras-ai.png"
+  },
+  {
+    "name": "Cursor",
+    "ai": true,
+    "names": 18,
+    "relayed": 17,
+    "domain": "cursor.com",
+    "icon": "/icons/cursor-ai.png"
+  },
+  {
+    "name": "Groq",
+    "ai": true,
+    "names": 2,
+    "relayed": 2,
+    "domain": "groq.com",
+    "icon": "/icons/groq-ai.png"
+  },
+  {
+    "name": "Camel AI",
+    "ai": true,
+    "names": 3,
+    "relayed": 3,
+    "domain": "camelai.com",
+    "icon": "/icons/camel-ai.png"
+  },
+  {
+    "name": "Dola (Cici)",
+    "ai": true,
+    "names": 4,
+    "relayed": 4,
+    "domain": "cici.com",
+    "icon": "/icons/dola-ai.png"
+  },
+  {
+    "name": "Hume AI",
+    "ai": true,
+    "names": 2,
+    "relayed": 2,
+    "domain": "hume.ai",
+    "icon": "/icons/hume-ai.png"
+  },
+  {
+    "name": "Monica",
+    "ai": true,
+    "names": 2,
+    "relayed": 2,
+    "domain": "monica.im",
+    "icon": "/icons/monica.png"
+  },
+  {
+    "name": "OpenCode",
+    "ai": true,
+    "names": 2,
+    "relayed": 2,
+    "domain": "opencode.ai",
+    "icon": "/icons/opencode-ai.png"
+  },
+  {
+    "name": "Spotify",
+    "ai": false,
+    "names": 33,
+    "relayed": 21,
+    "domain": "spotify.com",
+    "icon": "/icons/spotify.png"
+  },
+  {
+    "name": "Twitch",
+    "ai": false,
+    "names": 2,
+    "relayed": 2,
+    "domain": "twitch.tv",
+    "icon": "/icons/twitch.png"
+  },
+  {
+    "name": "Notion",
+    "ai": false,
+    "names": 7,
+    "relayed": 7,
+    "domain": "notion.com",
+    "icon": "/icons/notion.png"
+  },
+  {
+    "name": "DeepL",
+    "ai": false,
+    "names": 32,
+    "relayed": 32,
+    "domain": "deepl.com",
+    "icon": "/icons/deepl.png"
+  },
+  {
+    "name": "ElevenLabs",
+    "ai": false,
+    "names": 11,
+    "relayed": 11,
+    "domain": "elevenlabs.io",
+    "icon": "/icons/elevenlabs.png"
+  },
+  {
+    "name": "JetBrains",
+    "ai": false,
+    "names": 118,
+    "relayed": 99,
+    "domain": "jetbrains.com",
+    "icon": "/icons/jetbrains.png"
+  },
+  {
+    "name": "MangaLib",
+    "ai": false,
+    "names": 1,
+    "relayed": 1,
+    "domain": "mangalib.me",
+    "icon": "/icons/mangalib.png"
+  },
+  {
+    "name": "Parsec",
+    "ai": false,
+    "names": 1,
+    "relayed": 1,
+    "domain": "parsec.app",
+    "icon": "/icons/parsec.png"
+  },
+  {
+    "name": "Square",
+    "ai": false,
+    "names": 2,
+    "relayed": 2,
+    "domain": "squareup.com",
+    "icon": "/icons/square.png"
+  },
+  {
+    "name": "AMD",
+    "ai": false,
+    "names": 2,
+    "relayed": 2,
+    "domain": "amd.com",
+    "icon": "/icons/amd.png"
+  },
+  {
+    "name": "Autodesk",
+    "ai": false,
+    "names": 7,
+    "relayed": 5,
+    "domain": "autodesk.com",
+    "icon": "/icons/autodesk.png"
+  },
+  {
+    "name": "Badoo",
+    "ai": false,
+    "names": 6,
+    "relayed": 6,
+    "domain": "badoo.com",
+    "icon": "/icons/badoo.png"
+  },
+  {
+    "name": "Broadcom",
+    "ai": false,
+    "names": 4,
+    "relayed": 4,
+    "domain": "broadcom.com",
+    "icon": "/icons/broadcom.png"
+  },
+  {
+    "name": "Chess",
+    "ai": false,
+    "names": 3,
+    "relayed": 2,
+    "domain": "chess.com",
+    "icon": "/icons/chess.png"
+  },
+  {
+    "name": "Deezer",
+    "ai": false,
+    "names": 58,
+    "relayed": 53,
+    "domain": "deezer.com",
+    "icon": "/icons/deezer.png"
+  },
+  {
+    "name": "Dyson",
+    "ai": false,
+    "names": 6,
+    "relayed": 6,
+    "domain": "dyson.se",
+    "icon": "/icons/dyson.png"
+  },
+  {
+    "name": "Elgato",
+    "ai": false,
+    "names": 2,
+    "relayed": 2,
+    "domain": "elgato.com",
+    "icon": "/icons/elgato.png"
+  },
+  {
+    "name": "Fitbit",
+    "ai": false,
+    "names": 4,
+    "relayed": 4,
+    "domain": "fitbit.com",
+    "icon": "/icons/fitbit.png"
+  },
+  {
+    "name": "Framer",
+    "ai": false,
+    "names": 2,
+    "relayed": 2,
+    "domain": "framer.com",
+    "icon": "/icons/framer.png"
+  },
+  {
+    "name": "Guidedhacking",
+    "ai": false,
+    "names": 2,
+    "relayed": 2,
+    "domain": "guidedhacking.com",
+    "icon": ""
+  },
+  {
+    "name": "Guilded",
+    "ai": false,
+    "names": 2,
+    "relayed": 2,
+    "domain": "guilded.gg",
+    "icon": "/icons/guilded.png"
+  },
+  {
+    "name": "Imgur",
+    "ai": false,
+    "names": 1,
+    "relayed": 1,
+    "domain": "imgur.com",
+    "icon": "/icons/imgur.png"
+  },
+  {
+    "name": "Linear.app",
+    "ai": false,
+    "names": 8,
+    "relayed": 8,
+    "domain": "linear.app",
+    "icon": "/icons/linear-app.ico"
+  },
+  {
+    "name": "Make",
+    "ai": false,
+    "names": 2,
+    "relayed": 2,
+    "domain": "make.com",
+    "icon": "/icons/make.ico"
+  },
+  {
+    "name": "Naukri",
+    "ai": false,
+    "names": 157,
+    "relayed": 109,
+    "domain": "naukri.com",
+    "icon": "/icons/naukri.png"
+  },
+  {
+    "name": "Nvidia",
+    "ai": false,
+    "names": 3,
+    "relayed": 3,
+    "domain": "nvidia.com",
+    "icon": "/icons/nvidia.png"
+  },
+  {
+    "name": "Oracle",
+    "ai": false,
+    "names": 2,
+    "relayed": 2,
+    "domain": "oracle.com",
+    "icon": "/icons/oracle.png"
+  },
+  {
+    "name": "Posthog",
+    "ai": false,
+    "names": 1,
+    "relayed": 1,
+    "domain": "posthog.com",
+    "icon": "/icons/posthog.png"
+  },
+  {
+    "name": "Pump.fun",
+    "ai": false,
+    "names": 4,
+    "relayed": 4,
+    "domain": "pump.fun",
+    "icon": "/icons/pump-fun.png"
+  },
+  {
+    "name": "Qwant",
+    "ai": false,
+    "names": 2,
+    "relayed": 2,
+    "domain": "qwant.com",
+    "icon": "/icons/qwant.png"
+  },
+  {
+    "name": "Reve",
+    "ai": false,
+    "names": 6,
+    "relayed": 6,
+    "domain": "reve.art",
+    "icon": "/icons/reve.png"
+  },
+  {
+    "name": "SketchUp",
+    "ai": false,
+    "names": 4,
+    "relayed": 4,
+    "domain": "trimble.com",
+    "icon": "/icons/sketchup.png"
+  },
+  {
+    "name": "Strava",
+    "ai": false,
+    "names": 31,
+    "relayed": 23,
+    "domain": "strava.com",
+    "icon": "/icons/strava.png"
+  },
+  {
+    "name": "Tableau",
+    "ai": false,
+    "names": 2,
+    "relayed": 2,
+    "domain": "tableau.com",
+    "icon": "/icons/tableau.png"
+  },
+  {
+    "name": "Tailscale",
+    "ai": false,
+    "names": 1,
+    "relayed": 1,
+    "domain": "tailscale.com",
+    "icon": "/icons/tailscale.png"
+  },
+  {
+    "name": "TeamViewer",
+    "ai": false,
+    "names": 2,
+    "relayed": 2,
+    "domain": "teamviewer.com",
+    "icon": "/icons/teamviewer.png"
+  },
+  {
+    "name": "Tria.ge",
+    "ai": false,
+    "names": 2,
+    "relayed": 2,
+    "domain": "tria.ge",
+    "icon": ""
+  },
+  {
+    "name": "Truth Social",
+    "ai": false,
+    "names": 3,
+    "relayed": 3,
+    "domain": "truthsocial.com",
+    "icon": "/icons/truth-social.png"
+  },
+  {
+    "name": "Weather Underground",
+    "ai": false,
+    "names": 3,
+    "relayed": 1,
+    "domain": "wunderground.com",
+    "icon": "/icons/weather-underground.png"
+  },
+  {
+    "name": "Weather.com",
+    "ai": false,
+    "names": 3,
+    "relayed": 3,
+    "domain": "weather.com",
+    "icon": "/icons/weather-com.png"
+  },
+  {
+    "name": "Web Archive",
+    "ai": false,
+    "names": 1,
+    "relayed": 1,
+    "domain": "archive.org",
+    "icon": "/icons/web-archive.png"
+  },
+  {
+    "name": "WorkOS",
+    "ai": false,
+    "names": 1,
+    "relayed": 1,
+    "domain": "workos.com",
+    "icon": "/icons/workos.png"
+  },
+  {
+    "name": "Xerox",
+    "ai": false,
+    "names": 2,
+    "relayed": 2,
+    "domain": "xerox.com",
+    "icon": "/icons/xerox.png"
+  },
+  {
+    "name": "37signals (Basecamp)",
+    "ai": false,
+    "names": 4,
+    "relayed": 4,
+    "domain": "basecamp.com",
+    "icon": "/icons/37signals.png"
+  },
+  {
+    "name": "Aave",
+    "ai": false,
+    "names": 2,
+    "relayed": 2,
+    "domain": "aave.com",
+    "icon": "/icons/aave.png"
+  },
+  {
+    "name": "Affinity Studio",
+    "ai": false,
+    "names": 2,
+    "relayed": 2,
+    "domain": "affinity.studio",
+    "icon": "/icons/affinity-studio.png"
+  },
+  {
+    "name": "Analog Devices",
+    "ai": false,
+    "names": 2,
+    "relayed": 2,
+    "domain": "analog.com",
+    "icon": "/icons/analog.png"
+  },
+  {
+    "name": "Arduino",
+    "ai": false,
+    "names": 2,
+    "relayed": 2,
+    "domain": "arduino.cc",
+    "icon": "/icons/arduino.png"
+  },
+  {
+    "name": "Arkose Labs",
+    "ai": false,
+    "names": 2,
+    "relayed": 2,
+    "domain": "arkoselabs.com",
+    "icon": "/icons/arkoselabs.png"
+  },
+  {
+    "name": "Arrow Electronics",
+    "ai": false,
+    "names": 2,
+    "relayed": 2,
+    "domain": "arrow.com",
+    "icon": "/icons/arrow.png"
+  },
+  {
+    "name": "Avast",
+    "ai": false,
+    "names": 4,
+    "relayed": 4,
+    "domain": "avast.ru",
+    "icon": "/icons/avast.png"
+  },
+  {
+    "name": "Best Buy",
+    "ai": false,
+    "names": 3,
+    "relayed": 3,
+    "domain": "bestbuy.com",
+    "icon": "/icons/bestbuy.png"
+  },
+  {
+    "name": "Bike24",
+    "ai": false,
+    "names": 4,
+    "relayed": 4,
+    "domain": "bike24.com",
+    "icon": "/icons/bike24.png"
+  },
+  {
+    "name": "Brave",
+    "ai": false,
+    "names": 2,
+    "relayed": 2,
+    "domain": "brave.com",
+    "icon": "/icons/brave.png"
+  },
+  {
+    "name": "Chaos (V-Ray, Enscape)",
+    "ai": false,
+    "names": 5,
+    "relayed": 5,
+    "domain": "chaos.com",
+    "icon": "/icons/chaos.png"
+  },
+  {
+    "name": "MongoDB",
+    "ai": false,
+    "names": 4,
+    "relayed": 4,
+    "domain": "mongodb.com",
+    "icon": "/icons/mongodb.png"
+  },
+  {
+    "name": "ZeroSSL",
+    "ai": false,
+    "names": 1,
+    "relayed": 1,
+    "domain": "zerossl.com",
+    "icon": "/icons/zerossl.png"
+  },
+  {
+    "name": "CapCut",
+    "ai": false,
+    "names": 2,
+    "relayed": 2,
+    "domain": "capcut.com",
+    "icon": "/icons/capcut.png"
+  },
+  {
+    "name": "ClickUp",
+    "ai": false,
+    "names": 2,
+    "relayed": 2,
+    "domain": "clickup.com",
+    "icon": "/icons/clickup.png"
+  },
+  {
+    "name": "CoreWeave",
+    "ai": false,
+    "names": 2,
+    "relayed": 2,
+    "domain": "coreweave.com",
+    "icon": "/icons/coreweave.png"
+  },
+  {
+    "name": "Corsair",
+    "ai": false,
+    "names": 2,
+    "relayed": 2,
+    "domain": "corsair.com",
+    "icon": "/icons/corsair.png"
+  },
+  {
+    "name": "Crunchyroll",
+    "ai": false,
+    "names": 2,
+    "relayed": 2,
+    "domain": "crunchyroll.com",
+    "icon": "/icons/crunchyroll.png"
+  },
+  {
+    "name": "Cummins",
+    "ai": false,
+    "names": 2,
+    "relayed": 2,
+    "domain": "cummins.com",
+    "icon": "/icons/cummins.png"
+  },
+  {
+    "name": "Formula 1",
+    "ai": false,
+    "names": 2,
+    "relayed": 2,
+    "domain": "formula1.com",
+    "icon": "/icons/formula-1.png"
+  },
+  {
+    "name": "Game8",
+    "ai": false,
+    "names": 5,
+    "relayed": 5,
+    "domain": "game8.co",
+    "icon": "/icons/game8.png"
+  },
+  {
+    "name": "IKEA",
+    "ai": false,
+    "names": 2,
+    "relayed": 2,
+    "domain": "ikea.com",
+    "icon": "/icons/ikea.png"
+  },
+  {
+    "name": "Modivo",
+    "ai": false,
+    "names": 3,
+    "relayed": 3,
+    "domain": "modivo.pl",
+    "icon": "/icons/modivo.png"
+  },
+  {
+    "name": "LEGO",
+    "ai": false,
+    "names": 2,
+    "relayed": 2,
+    "domain": "lego.com",
+    "icon": "/icons/lego.png"
+  },
+  {
+    "name": "Makita",
+    "ai": false,
+    "names": 17,
+    "relayed": 15,
+    "domain": "makita.com",
+    "icon": "/icons/makita.png"
+  },
+  {
+    "name": "Microchip",
+    "ai": false,
+    "names": 2,
+    "relayed": 2,
+    "domain": "microchip.com",
+    "icon": "/icons/microchip.png"
+  },
+  {
+    "name": "Scribd",
+    "ai": false,
+    "names": 3,
+    "relayed": 3,
+    "domain": "scribd.com",
+    "icon": "/icons/scribd.png"
+  },
+  {
+    "name": "Wix",
+    "ai": false,
+    "names": 1,
+    "relayed": 1,
+    "domain": "wix.com",
+    "icon": "/icons/wix.png"
+  }
+]

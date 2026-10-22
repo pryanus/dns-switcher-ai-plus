@@ -28,7 +28,7 @@ class AppConfig:
         custom_services: Optional[List[Dict]] = None,
         custom_providers: Optional[List[Dict]] = None,
         active_routes: Optional[Dict[str, Dict]] = None,
-        catalog_revision: int = 5,
+        catalog_revision: int = 6,
         hidden_services=None,
         rejected_routes=None
     ):
@@ -43,7 +43,8 @@ class AppConfig:
             "geohide-us": True,
             "malw-dns": True,
             "zapret-dns": True,
-            "dns-ai": True
+            "dns-ai": True,
+            "google-public-dns": True
         }
         self.auto_update_db = auto_update_db
         self.auto_update_interval_hours = auto_update_interval_hours
@@ -140,6 +141,15 @@ class StorageManager:
                 self.config.favorites.append('claude')
             self.config.hidden_services = [sid for sid in self.config.hidden_services if sid != 'claude']
             self.config.catalog_revision = 5
+            self.save_config()
+
+        if self.config.catalog_revision < 6:
+            # Старые версии оставляли EU/US выключенными, обрезая пул до двух маршрутов.
+            for region in ('ru', 'eu', 'us'):
+                self.config.providers_enabled['geohide-' + region] = True
+            self.config.providers_enabled['google-public-dns'] = True
+            self.config.rejected_routes.clear()
+            self.config.catalog_revision = 6
             self.save_config()
 
     def load_config(self) -> AppConfig:

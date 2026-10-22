@@ -37,6 +37,11 @@ class VerificationWorker(QThread):
         return ServiceVerifier.verify_candidate(ip, domain, path=path, timeout=2.5,
             cancellation=self.cancellation, accepted_codes=accepted_codes)
 
+    def _provider_rank(self, provider_id):
+        provider = self.provider_manager.get_provider(provider_id)
+        return (0 if provider_id.startswith('geohide-') else 2 if provider_id == 'google-public-dns' else 1,
+                -(provider.priority if provider else 0))
+
     def run(self):
         summary = dict(ok=0, fixed=0, failed=0, total=0, cancelled=False)
         acquired = False
@@ -74,6 +79,7 @@ class VerificationWorker(QThread):
         self.cancellation.check()
         provider_name = selected.provider_name
         names = {}
+        provider_ids = {}
         if current:
             ips = entries.get(domain, []) or self._resolve(domain)
         else:
@@ -81,6 +87,7 @@ class VerificationWorker(QThread):
                 alternatives = self.provider_manager.get_candidates(domain, self.cancellation)
                 ips = [c.ip for c in alternatives]
                 names = {c.ip: c.provider_name for c in alternatives}
+                provider_ids = {c.ip: c.provider_id for c in alternatives}
                 if not ips and self.forced:
                     ips = [selected.ip]
             else:
@@ -88,13 +95,14 @@ class VerificationWorker(QThread):
                 ips = [c.ip for c in provider.fetch_candidates(domain)] if provider else [selected.ip]
         # Пропущенные маршруты относятся к главному домену. Рабочий API/CDN может
         # иметь тот же IP и остаётся доступным для другого маршрута приложения.
-        ips = list(dict.fromkeys(ips))[:32]
+        ips = list(dict.fromkeys(ips))[:64]
         if not ips:
             return dict(domain=domain, label=label, ok=False, details='Нет адреса у провайдера')
         probes = parallel(ips, lambda ip: self._probe(ip, domain, path, codes),
-                          self.cancellation, timeout=3.0, limit=32)
+                          self.cancellation, timeout=3.0, limit=64)
         good = min((r for r in probes if r and r.is_routable),
-                   key=lambda r: r.latency_ms, default=None)
+                   key=lambda r: (self._provider_rank(provider_ids.get(r.ip, selected.provider_id)),
+                                  r.latency_ms), default=None)
         last = good or next((r for r in probes if r), None)
         return dict(domain=domain, label=label, ok=bool(good), ip=good.ip if good else '',
                     provider=names.get(good.ip, provider_name) if good else provider_name,
@@ -113,15 +121,25 @@ class VerificationWorker(QThread):
         entries = self.hosts_manager.get_service_current_ips(service.domains)
         current_ips = entries.get(service.primary_domain, [])
         current_ip = current_ips[0] if current_ips else ''
+        checks = checks_for(service)
+        primary = next((c for c in checks if c[0] == service.primary_domain),
+                       (service.primary_domain, service.test_path, 'Приложение', ()))
         if not self.rotate and not self.forced:
             ips = current_ips
             if not ips and not self.auto_fix:
                 resolved = parallel([service.primary_domain], self._resolve,
                                     self.cancellation, timeout=1.5)[0]
                 ips = resolved or []
-            probes = parallel(ips[:2], lambda ip: self._probe(ip, service.primary_domain,
-                service.test_path, (302, 303, 307, 308)), self.cancellation, timeout=3)
+            probes = parallel(ips[:2], lambda ip: self._probe(ip, primary[0], primary[1], primary[3]),
+                              self.cancellation, timeout=3)
             good = next((probe for probe in probes if probe and probe.is_routable), None)
+            if good:
+                selected_current = CandidateIP(good.ip, 'current', 'Из hosts')
+                critical = parallel([c for c in checks if c[0] != service.primary_domain],
+                    lambda c: self._domain_route(c, selected_current, entries, current=True),
+                    self.cancellation, timeout=4, limit=8)
+                if not all(row and row['ok'] for row in critical):
+                    good = None
             if good:
                 active = dict(self.storage.get_active_route(service.id) or {})
                 provider_name = active.get('provider_name') if active.get('ip') == good.ip else None
@@ -136,7 +154,7 @@ class VerificationWorker(QThread):
                 good.applied = False
                 good.is_current = True
                 good.confirmable = True
-                good.details = 'Активный маршрут отвечает по HTTPS; адрес сохранён. ' + good.details
+                good.details = 'Сетевые узлы отвечают; работа аккаунта без авторизации не подтверждена. ' + good.details
                 if current_ips:
                     active.update(ip=good.ip, provider_name=provider_name, status='OK',
                         latency_ms=good.latency_ms, network_ok=True, confirmable=True,
@@ -154,9 +172,6 @@ class VerificationWorker(QThread):
                 self.service_result.emit(service.id, result, 'Из hosts' if current_ip else 'Системный DNS')
                 summary['failed'] += 1
                 return
-        checks = checks_for(service)
-        primary = next((c for c in checks if c[0] == service.primary_domain),
-                       (service.primary_domain, service.test_path, 'Приложение', ()))
         rejected = set(self.storage.config.rejected_routes.get(service.id, []))
         # Подбор всегда перебирает провайдеров: рабочая витрина не доказывает работу приложения.
         if self.forced:
@@ -179,16 +194,13 @@ class VerificationWorker(QThread):
             candidates = pool
 
         if self.rotate and not self.forced:
-            candidates = [c for c in candidates if c.ip != current_ip]
-            if not candidates:
-                # Новый круг может вернуть старый альтернативный IP, но никогда активный.
-                candidates = [c for c in pool if c.ip != current_ip]
-                if candidates:
-                    self.storage.config.rejected_routes[service.id] = [current_ip] if current_ip else []
-                    self.storage.save_config()
+            # Неисправные непосещённые IP не должны навсегда блокировать новый круг.
+            candidates = [c for c in pool if c.ip != current_ip]
 
+        self.progress.emit(self.services.index(service) + 1, len(self.services),
+                           f'{service.name}: {len(candidates)} IP, всего в пуле {len(pool)}')
         results = parallel(candidates, lambda c: self._probe(c.ip, primary[0], primary[1], primary[3]),
-                           self.cancellation, timeout=3.0, limit=32)
+                           self.cancellation, timeout=3.0, limit=64)
         checked = []
         viable = []
         for candidate, probe in zip(candidates, results):
@@ -199,7 +211,9 @@ class VerificationWorker(QThread):
                 viable.append((candidate, probe))
         # Работоспособность проверяем первой; задержка сортирует подходящие кандидаты.
         if not self.prefer_provider_order:
-            viable.sort(key=lambda item: (item[1].status != ServiceStatus.OK, item[1].latency_ms))
+            viable.sort(key=lambda item: (item[0].ip in rejected,
+                                          self._provider_rank(item[0].provider_id),
+                                          item[1].latency_ms))
         selected = best = report = None
         failure_report = []
         for candidate, probe in viable:
@@ -249,6 +263,9 @@ class VerificationWorker(QThread):
             return
 
         mappings = {r['domain']: r['ip'] for r in report}
+        if self.rotate and selected.ip in rejected:
+            self.storage.config.rejected_routes[service.id] = [current_ip] if current_ip else []
+            self.storage.save_config()
         if self.auto_fix:
             extra = [d for d in service.domains if d not in mappings]
             # Базы провайдеров могут пополняться новыми точными именами хранилищ файлов.

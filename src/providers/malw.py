@@ -34,7 +34,12 @@ class MalwDnsProvider(BaseProvider):
             cache_dir=cache_dir
         )
         self._ip_cache: Dict[str, List[str]] = {}
+        self._hosts_ips = {}
         self._load_cache()
+        bundled = Path(__file__).resolve().parents[1] / 'assets/malw_hosts.txt'
+        if not self._hosts_ips and bundled.exists():
+            self._hosts_ips = parse_hosts(bundled.read_text(encoding='utf-8'))
+        self.supported_domains = set(self._hosts_ips)
 
     @property
     def _cache_file(self) -> Optional[Path]:
@@ -51,6 +56,7 @@ class MalwDnsProvider(BaseProvider):
                 data = json.loads(cache_p.read_text(encoding="utf-8"))
                 self.last_updated = data.get("last_updated")
                 self._ip_cache = data.get("resolved_ips", {})
+                self._hosts_ips = data.get('hosts_ips', {})
             except Exception as e:
                 self.last_error = f"Cache error: {e}"
 
@@ -60,6 +66,7 @@ class MalwDnsProvider(BaseProvider):
             data = {
                 "last_updated": self.last_updated,
                 "resolved_ips": self._ip_cache,
+                "hosts_ips": self._hosts_ips,
             }
             cache_p.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
 
@@ -98,7 +105,7 @@ class MalwDnsProvider(BaseProvider):
 
         clean_d = domain.strip().lower()
         cached = self._ip_cache.get(clean_d, [])
-        ips = self.resolve_domain_doh(clean_d) or cached
+        ips = list(dict.fromkeys(self._hosts_ips.get(clean_d, []) + (self.resolve_domain_doh(clean_d) or cached)))
 
         results = []
         for ip in ips:
@@ -122,6 +129,8 @@ class MalwDnsProvider(BaseProvider):
                     mappings = parse_hosts(resp.text)
                     if not mappings:
                         raise ValueError("Источник не содержит публичных адресов")
+                    self._hosts_ips = mappings
+                    self.supported_domains = set(mappings)
                     self._ip_cache = mappings
                     self.last_error = None
 

@@ -85,14 +85,12 @@ class ServiceCard(QWidget):
         feedback_layout.setContentsMargins(0, 0, 0, 0)
         open_btn = QPushButton('Открыть')
         open_btn.clicked.connect(lambda: QDesktopServices.openUrl(QUrl('https://' + service.primary_domain)))
-        self.confirm_btn = QPushButton('Работает')
-        self.confirm_btn.clicked.connect(lambda: self.route_feedback.emit(service.id, 'confirm'))
         self.next_btn = QPushButton('Другой маршрут')
         self.next_btn.clicked.connect(lambda: self.route_feedback.emit(service.id, 'reject'))
         self.restore_dns_btn = QPushButton('Сбросить DNS')
         self.restore_dns_btn.setToolTip('Удалить только записи DNS Switcher для этого сервиса. Исходные строки hosts сохраняются.')
         self.restore_dns_btn.clicked.connect(lambda: self.route_feedback.emit(service.id, 'restore_dns'))
-        for button in (open_btn, self.confirm_btn, self.next_btn, self.restore_dns_btn):
+        for button in (open_btn, self.next_btn, self.restore_dns_btn):
             feedback_layout.addWidget(button)
         self.main_layout.addWidget(self.feedback_row)
 
@@ -193,7 +191,7 @@ class ServiceCard(QWidget):
         provider = self.route_info.get('provider_name', '')
         self.ip_badge.setText(f"{provider or 'Из hosts'} · {self.current_ip}" if self.current_ip else 'Системный DNS')
         status = self.route_info.get('status', 'UNKNOWN')
-        label, color = {'OK': ('Работает', '#7acb9c'),
+        label, color = {'OK': ('Маршрут отвечает', '#7acb9c'),
                         'PARTIAL': ('DNS применён' if self._result_applied else 'Проверка завершена', '#aaaab2'),
                         'DEAD': ('Не удалось проверить', '#aaaab2'),
                         'UNKNOWN': ('Не удалось проверить', '#aaaab2')}.get(status, ('', '#aaaab2'))
@@ -203,7 +201,6 @@ class ServiceCard(QWidget):
             label = self.route_info['route_message']
         self.feedback_row.setVisible(True)
         self.next_btn.setEnabled(self.service.routing_mode == 'geo')
-        self.confirm_btn.setEnabled(bool(self.current_ip) and self.service.routing_mode == 'geo')
 
         self.help_label.clear()
         self.help_label.hide()

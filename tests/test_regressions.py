@@ -37,6 +37,8 @@ class Regressions(unittest.TestCase):
         for provider in self.providers.list_providers():
             if hasattr(provider, 'resolve_domain_doh'):
                 provider.resolve_domain_doh = MagicMock(return_value=[])
+            if hasattr(provider, '_resolve_doh'):
+                provider._resolve_doh = MagicMock(return_value=[])
         self.service = ServiceDef(id='example', name='Example', category='Test',
             primary_domain='example.com', domains=['example.com', 'api.example.com'])
 
@@ -118,6 +120,17 @@ class Regressions(unittest.TestCase):
         self.assertEqual(self.hm.parse_all_entries()['example.com'][0], '8.8.4.4')
         self.assertEqual(self.hm.parse_all_entries()['api.example.com'], ['1.1.1.1'])
 
+    def test_rotation_starts_new_circle_when_unvisited_routes_are_dead(self):
+        self.hm.update_service_ip('Example', '1.1.1.1', ['example.com', 'api.example.com'])
+        self.storage.config.rejected_routes['example'] = ['1.1.1.1', '8.8.4.4']
+        pool = [CandidateIP(ip, 'manual', 'Test') for ip in ['1.1.1.1', '8.8.4.4', '9.9.9.9']]
+        worker = VerificationWorker([self.service], self.hm, self.providers, self.storage, True, rotate=True)
+        with patch.object(self.providers, 'get_candidates', return_value=pool), \
+             patch.object(ServiceVerifier, 'verify_candidate', side_effect=lambda ip, domain, **kw:
+                 self._result(ip, domain, ServiceStatus.DEAD if ip == '9.9.9.9' else ServiceStatus.OK)):
+            worker.run()
+        self.assertEqual(self.hm.parse_all_entries()['example.com'][0], '8.8.4.4')
+
     def test_full_route_replacement_drops_only_stale_managed_domains(self):
         original = self.hosts.read_bytes()
         self.hm.update_service_ip('Example', '1.1.1.1', ['example.com', 'old.example'])
@@ -126,10 +139,10 @@ class Regressions(unittest.TestCase):
         self.assertNotIn('old.example', self.hm.parse_all_entries())
         self.assertTrue(self.hosts.read_bytes().endswith(original))
 
-    def test_cloudflare_browser_challenge_is_recognized_with_http_200(self):
+    def test_cloudflare_challenge_is_not_a_working_route(self):
         result = VerificationResult('1.1.1.1', 'example.com', ServiceStatus.PARTIAL, 1,
             'Cloudflare challenge', 'HTTP', 200)
-        self.assertTrue(result.is_routable)
+        self.assertFalse(result.is_routable)
         result.details = 'Generic access denied'
         self.assertFalse(result.is_routable)
 
@@ -225,19 +238,18 @@ class Regressions(unittest.TestCase):
             self.assertTrue(client.call_args.kwargs['http2'])
             self.assertIsNone(provider.last_error)
 
-    def test_cloudflare_route_can_be_selected_without_claiming_full_access(self):
+    def test_cloudflare_route_is_not_applied(self):
         service = ServiceDef(id='gemini', name='Gemini', category='AI',
                              primary_domain='gemini.google.com', domains=['gemini.google.com'])
         worker = VerificationWorker([service], self.hm, self.providers, self.storage, True,
                                     forced=('1.1.1.1', 'DNS-AI'))
         challenge = VerificationResult('1.1.1.1', service.primary_domain, ServiceStatus.PARTIAL,
             1, 'HTTP 403 (Cloudflare challenge active)', 'HTTP', 403)
-        self.assertTrue(challenge.is_routable)
+        self.assertFalse(challenge.is_routable)
         with patch.object(ServiceVerifier, 'verify_candidate', return_value=challenge):
             worker.run()
-        self.assertEqual(self.hm.parse_all_entries()[service.primary_domain], ['1.1.1.1'])
-        self.assertEqual(self.storage.get_active_route('gemini')['provider_name'], 'DNS-AI')
-        self.assertEqual(self.storage.get_active_route('gemini')['status'], 'OK')
+        self.assertNotIn(service.primary_domain, self.hm.parse_all_entries())
+        self.assertIsNone(self.storage.get_active_route('gemini'))
 
     def test_api_failure_rejects_a_working_homepage(self):
         self.hosts.write_text('127.0.0.1 localhost\n')
@@ -425,6 +437,7 @@ class Regressions(unittest.TestCase):
             self.assertTrue(worker.wait(500))
 
     def test_working_external_hosts_route_is_kept_without_fetching_a_pool(self):
+        self.hosts.write_text('8.8.8.8 example.com api.example.com\n')
         before = self.hosts.read_bytes()
         worker = VerificationWorker([self.service], self.hm, self.providers, self.storage, True)
         results = []
@@ -458,6 +471,48 @@ class Regressions(unittest.TestCase):
              patch.object(ServiceVerifier, 'verify_candidate', side_effect=probe):
             worker.run()
         self.assertEqual(self.storage.get_active_route('example')['ip'], '8.8.4.4')
+
+    def test_geohide_beats_a_faster_non_geohide_route(self):
+        self.hosts.write_text('127.0.0.1 localhost\n')
+        candidates = [CandidateIP('1.1.1.1', 'zapret-dns', 'Zapret'),
+                      CandidateIP('8.8.4.4', 'geohide-eu', 'GeoHide (EU)')]
+        worker = VerificationWorker([self.service], self.hm, self.providers, self.storage, True, rotate=True)
+        with patch.object(self.providers, 'get_candidates', return_value=candidates), \
+             patch.object(ServiceVerifier, 'verify_candidate', side_effect=lambda ip, domain, **kw:
+                 VerificationResult(ip, domain, ServiceStatus.OK, 1 if ip == '1.1.1.1' else 150)):
+            worker.run()
+        route = self.storage.get_active_route('example')
+        self.assertEqual(route['ip'], '8.8.4.4')
+        self.assertEqual(route['domain_ips']['api.example.com'], '8.8.4.4')
+
+    def test_old_disabled_geohide_regions_are_enabled_once(self):
+        import json
+        self.storage.config_path.write_text(json.dumps(dict(catalog_revision=5,
+            providers_enabled={'geohide-ru': True, 'geohide-eu': False, 'geohide-us': False})))
+        migrated = StorageManager(str(self.storage.data_dir))
+        self.assertTrue(migrated.config.providers_enabled['geohide-eu'])
+        self.assertTrue(migrated.config.providers_enabled['geohide-us'])
+        migrated.config.providers_enabled['geohide-eu'] = False
+        migrated.save_config()
+        self.assertFalse(StorageManager(str(self.storage.data_dir)).config.providers_enabled['geohide-eu'])
+
+    def test_suspicious_traffic_is_rejected_even_with_http_200(self):
+        for response in (b'HTTP/1.1 200 OK\r\n\r\nOur systems have detected unusual traffic',
+                         b'HTTP/1.1 302 Found\r\nLocation: https://www.google.com/sorry/index\r\n\r\n'):
+            with patch('socket.socket'), patch('ssl.create_default_context') as context:
+                context.return_value.wrap_socket.return_value.recv.side_effect = [response, b'']
+                result = ServiceVerifier.verify_candidate('1.1.1.1', 'gemini.google.com')
+                self.assertFalse(result.is_routable)
+
+    def test_current_homepage_success_cannot_hide_failed_api(self):
+        self.hosts.write_text('8.8.8.8 example.com api.example.com\n')
+        worker = VerificationWorker([self.service], self.hm, self.providers, self.storage, False)
+        results = []
+        worker.service_result.connect(lambda sid, result, provider: results.append(result))
+        with patch.object(ServiceVerifier, 'verify_candidate', side_effect=lambda ip, domain, **kw:
+             self._result(ip, domain, ServiceStatus.OK if domain == 'example.com' else ServiceStatus.DEAD)):
+            worker.run()
+        self.assertEqual(results[0].status, ServiceStatus.UNKNOWN)
 
     def test_finished_pool_restarts_from_geohide_priority(self):
         self.hosts.write_text('127.0.0.1 localhost\n')

@@ -33,6 +33,9 @@ class ProviderManager:
             MalwDnsProvider(enabled=True, priority=15, cache_dir=self.cache_dir),
             ZapretDnsProvider(enabled=True, priority=14, cache_dir=self.cache_dir),
             DnsAiProvider(enabled=True, priority=13, cache_dir=self.cache_dir),
+            CustomProvider('google-public-dns', 'Google Public DNS (обычный DNS)',
+                           CustomProvider.TYPE_DOH, 'https://dns.google/dns-query',
+                           enabled=True, priority=1, cache_dir=self.cache_dir),
         ]
         for p in defaults:
             self.providers[p.id] = p

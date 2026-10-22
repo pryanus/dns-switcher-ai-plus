@@ -2,7 +2,7 @@
 
 # Коды относятся только к известным путям без авторизации, а не ко всему сервису.
 PROFILES = {
-    'githubcopilot': [('api.githubcopilot.com', '/', 'Copilot API', (401, 404, 405))],
+    'githubcopilot': [('api.individual.githubcopilot.com', '/', 'Copilot API', (401, 404, 405))],
     'groq': [('console.groq.com', '/', 'Консоль Groq', (301, 302, 303, 307, 308)),
              ('api.groq.com', '/', 'API Groq', (401, 404))],
     'cerebras': [('cerebras.ai', '/', 'Cerebras', (301, 302, 303, 307, 308)),
@@ -15,8 +15,10 @@ PROFILES = {
         ('files.oaiusercontent.com', '/', 'Файлы и вложения', (404,)),
     ],
     'gemini': [
-        ('gemini.google.com', '/app', 'Приложение Gemini', (302, 303, 307, 308)),
+        ('gemini.google.com', '/app', 'Приложение Gemini', ()),
         ('geminiweb-pa.clients6.google.com', '/', 'API Gemini', (401, 404)),
+        ('geminiweb-pa.clients.google.com', '/', 'API приложения', (401, 404)),
+        ('generativelanguage.googleapis.com', '/v1beta/models', 'API моделей', (401,)),
     ],
     'claude': [
         ('claude.ai', '/api/organizations', 'API аккаунта', (401,)),
