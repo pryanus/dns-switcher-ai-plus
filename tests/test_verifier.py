@@ -57,6 +57,35 @@ class TestServiceVerifier(unittest.TestCase):
             self.assertEqual(result.http_code, 200)
             self.assertEqual(result.stage_reached, "HTTP")
 
+    def test_cloudflare_widget_and_csp_are_not_challenge_pages(self):
+        for response in (
+            b'HTTP/1.1 200 OK\r\nContent-Security-Policy: frame-src https://challenges.cloudflare.com\r\n\r\n<title>OpenRouter</title>',
+            b'HTTP/1.1 200 OK\r\n\r\n<title>Notion</title><script src="https://challenges.cloudflare.com/turnstile/v0/api.js"></script>'
+        ):
+            with self.subTest(response=response), patch('socket.socket'), patch('ssl.create_default_context') as context:
+                context.return_value.wrap_socket.return_value.recv.side_effect = [response, b'']
+                result = ServiceVerifier.verify_candidate('1.1.1.1', 'example.com')
+                self.assertEqual(result.status, ServiceStatus.OK)
+                self.assertFalse(result.is_browser_challenge)
+
+    def test_real_cloudflare_challenge_is_never_routable(self):
+        with patch('socket.socket'), patch('ssl.create_default_context') as context:
+            context.return_value.wrap_socket.return_value.recv.side_effect = [
+                b'HTTP/1.1 403 Forbidden\r\ncf-mitigated: challenge\r\n\r\n<title>Just a moment...</title>', b'']
+            result = ServiceVerifier.verify_candidate('1.1.1.1', 'example.com')
+            self.assertTrue(result.is_browser_challenge)
+            self.assertFalse(result.is_routable)
+
+    def test_accepted_redirect_is_followed_and_blocked_landing_rejected(self):
+        with patch('socket.socket'), patch('ssl.create_default_context') as context:
+            first, second = MagicMock(), MagicMock()
+            context.return_value.wrap_socket.side_effect = [first, second]
+            first.recv.side_effect = [b'HTTP/1.1 302 Found\r\nLocation: /login\r\nContent-Length: 0\r\n\r\n']
+            second.recv.side_effect = [b'HTTP/1.1 200 OK\r\n\r\nNot available in your country', b'']
+            result = ServiceVerifier.verify_candidate('1.1.1.1', 'example.com', accepted_codes=(302,))
+            self.assertEqual(result.status, ServiceStatus.DEAD)
+            self.assertIn('Geo-block', result.details)
+
     def test_isp_block_classification(self):
         with patch("socket.socket") as mock_sock_cls, \
              patch("ssl.create_default_context") as mock_ssl_ctx_cls:

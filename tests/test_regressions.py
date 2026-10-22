@@ -294,18 +294,46 @@ class Regressions(unittest.TestCase):
             self.assertTrue(client.call_args.kwargs['http2'])
             self.assertIsNone(provider.last_error)
 
-    def test_cloudflare_route_is_not_applied_without_an_explicit_switch(self):
-        service = ServiceDef(id='gemini', name='Gemini', category='AI',
-                             primary_domain='gemini.google.com', domains=['gemini.google.com'])
-        worker = VerificationWorker([service], self.hm, self.providers, self.storage, True)
-        challenge = VerificationResult('1.1.1.1', service.primary_domain, ServiceStatus.PARTIAL,
-            1, 'Cloudflare challenge: JavaScript required', 'HTTP', 403)
-        self.assertFalse(challenge.is_routable)
-        with patch.object(self.providers, 'get_candidates', return_value=[CandidateIP('1.1.1.1', 'manual', 'Test')]), \
-             patch.object(ServiceVerifier, 'verify_candidate', return_value=challenge):
+    def test_cloudflare_route_is_never_applied_even_after_explicit_switch(self):
+        for mode in ({}, {'rotate': True}, {'forced': ('1.1.1.1', 'Test')}):
+            with self.subTest(mode=mode):
+                service = ServiceDef(id='gemini', name='Gemini', category='AI',
+                                     primary_domain='gemini.google.com', domains=['gemini.google.com'])
+                before = self.hosts.read_bytes()
+                worker = VerificationWorker([service], self.hm, self.providers, self.storage, True, **mode)
+                challenge = VerificationResult('1.1.1.1', service.primary_domain, ServiceStatus.PARTIAL,
+                    1, 'Cloudflare challenge: JavaScript required', 'HTTP', 403)
+                with patch.object(self.providers, 'get_candidates', return_value=[CandidateIP('1.1.1.1', 'manual', 'Test')]), \
+                     patch.object(ServiceVerifier, 'verify_candidate', return_value=challenge):
+                    worker.run()
+                self.assertEqual(self.hosts.read_bytes(), before)
+                self.assertIsNone(self.storage.get_active_route('gemini'))
+
+    def test_failed_provider_api_does_not_stop_the_next_provider(self):
+        pool = [CandidateIP('1.1.1.1', 'first', 'First'), CandidateIP('8.8.4.4', 'second', 'Second')]
+        worker = VerificationWorker([self.service], self.hm, self.providers, self.storage, True)
+        def probe(ip, domain, **kwargs):
+            status = ServiceStatus.DEAD if domain == 'api.example.com' and ip == '1.1.1.1' else ServiceStatus.OK
+            return self._result(ip, domain, status)
+        with patch.object(self.providers, 'get_candidates', return_value=pool), \
+             patch.object(ServiceVerifier, 'verify_candidate', side_effect=probe):
             worker.run()
-        self.assertNotIn(service.primary_domain, self.hm.parse_all_entries())
-        self.assertIsNone(self.storage.get_active_route('gemini'))
+        route = self.storage.get_active_route('example')
+        self.assertEqual(route['ip'], '8.8.4.4')
+        self.assertEqual(set(route['domain_ips'].values()), {'8.8.4.4'})
+
+    def test_primary_and_api_from_incompatible_providers_are_not_combined(self):
+        pool = [CandidateIP('1.1.1.1', 'first', 'First'), CandidateIP('8.8.4.4', 'second', 'Second')]
+        before = self.hosts.read_bytes()
+        worker = VerificationWorker([self.service], self.hm, self.providers, self.storage, True)
+        def probe(ip, domain, **kwargs):
+            good = (domain == 'example.com' and ip == '1.1.1.1') or (domain == 'api.example.com' and ip == '8.8.4.4')
+            return self._result(ip, domain, ServiceStatus.OK if good else ServiceStatus.DEAD)
+        with patch.object(self.providers, 'get_candidates', return_value=pool), \
+             patch.object(ServiceVerifier, 'verify_candidate', side_effect=probe):
+            worker.run()
+        self.assertIsNone(self.storage.get_active_route('example'))
+        self.assertEqual(self.hosts.read_bytes(), before)
 
     def test_verified_response_has_priority_over_cloudflare_challenge(self):
         self.hm.update_service_ip('Example', '9.9.9.9', self.service.domains)
@@ -326,9 +354,8 @@ class Regressions(unittest.TestCase):
 
     def test_explicit_rotation_changes_ip_for_every_builtin_service(self):
         pool = [CandidateIP(ip, 'manual', 'Test') for ip in ('1.1.1.1', '8.8.4.4', '9.9.9.9')]
-        def challenge(ip, domain, **kwargs):
-            return VerificationResult(ip, domain, ServiceStatus.PARTIAL, 10,
-                                      'Cloudflare challenge: JavaScript required', 'HTTP', 403)
+        def verified(ip, domain, **kwargs):
+            return VerificationResult(ip, domain, ServiceStatus.OK, 10, 'Verified endpoint', 'HTTP', 200)
         for service in Catalog().list_all():
             with self.subTest(service=service.id):
                 original = ('127.0.0.1 localhost\r\n' +
@@ -343,12 +370,12 @@ class Regressions(unittest.TestCase):
                     self.storage.config.rejected_routes[service.id].append(previous)
                     worker = VerificationWorker([service], self.hm, self.providers, self.storage, True, rotate=True)
                     with patch.object(self.providers, 'get_candidates', return_value=pool), \
-                         patch.object(ServiceVerifier, 'verify_candidate', side_effect=challenge):
+                         patch.object(ServiceVerifier, 'verify_candidate', side_effect=verified):
                         worker.run()
                     route = self.storage.get_active_route(service.id)
                     self.assertIsNotNone(route)
                     self.assertNotEqual(route['ip'], previous)
-                    self.assertEqual(route['status'], 'PARTIAL')
+                    self.assertEqual(route['status'], 'OK')
                     self.assertFalse(route['confirmed'])
                     self.assertEqual(self.hm.parse_all_entries()[service.primary_domain], [route['ip']])
                     self.assertEqual(self.hm.parse_all_entries()['keep.example'], ['1.1.1.1'])
@@ -590,13 +617,13 @@ class Regressions(unittest.TestCase):
         self.assertEqual(route['ip'], '8.8.4.4')
         self.assertEqual(route['domain_ips']['api.example.com'], '8.8.4.4')
 
-    def test_old_disabled_geohide_regions_are_enabled_once(self):
+    def test_upgrade_preserves_disabled_geohide_regions(self):
         import json
         self.storage.config_path.write_text(json.dumps(dict(catalog_revision=5,
             providers_enabled={'geohide-ru': True, 'geohide-eu': False, 'geohide-us': False})))
         migrated = StorageManager(str(self.storage.data_dir))
-        self.assertTrue(migrated.config.providers_enabled['geohide-eu'])
-        self.assertTrue(migrated.config.providers_enabled['geohide-us'])
+        self.assertFalse(migrated.config.providers_enabled['geohide-eu'])
+        self.assertFalse(migrated.config.providers_enabled['geohide-us'])
         migrated.config.providers_enabled['geohide-eu'] = False
         migrated.save_config()
         self.assertFalse(StorageManager(str(self.storage.data_dir)).config.providers_enabled['geohide-eu'])

@@ -6,6 +6,7 @@ Stage 3: HTTP probe (status code, headers, error/block-page detection).
 """
 
 import socket
+import re
 import ssl
 import time
 from enum import Enum
@@ -171,8 +172,12 @@ class ServiceVerifier:
                    b"/unsupported-country", b"/unsupported_country", b"/app-unavailable")
             if any(sig in lower for sig in geo):
                 return result(ServiceStatus.DEAD, "Региональный запрет (Geo-block error)", code)
-            if b"cf-mitigated:" in lower or b"challenges.cloudflare.com" in lower:
-                return result(ServiceStatus.PARTIAL, "Cloudflare challenge: откройте сервис в браузере", code)
+            headers_lower, _, body_lower = lower.partition(b'\r\n\r\n')
+            challenge_header = re.search(br'(?im)^cf-mitigated:[ \t]*challenge[ \t]*\r?$', headers_lower)
+            challenge_page = (b'<title>just a moment' in body_lower and
+                              b'/cdn-cgi/challenge-platform/' in body_lower)
+            if challenge_header or challenge_page:
+                return result(ServiceStatus.PARTIAL, "Cloudflare challenge: доступ не подтверждён", code)
             if clean_domain.endswith('.oaiusercontent.com') and code == 403 and any(
                 marker in lower for marker in (b'<code>authenticationfailed</code>',
                     b'<code>publicaccessnotpermitted</code>', b'<code>authorizationfailure</code>')):
@@ -180,7 +185,7 @@ class ServiceVerifier:
             if code == 403 and clean_domain.endswith(('.googleapis.com', '.clients6.google.com')) and (
                 b'unregistered callers' in lower or b'api_key_invalid' in lower):
                 return result(ServiceStatus.OK, 'API отвечает; для запроса требуется сессия или ключ', code)
-            if code in (200, 204) or code in accepted_codes:
+            if code in (200, 204) or (code in accepted_codes and code not in (301, 302, 303, 307, 308)):
                 return result(ServiceStatus.OK, f"HTTPS отвечает (HTTP {code})", code)
             if code in (301, 302, 303, 307, 308):
                 headers = response.split(b'\r\n\r\n', 1)[0].split(b'\r\n')

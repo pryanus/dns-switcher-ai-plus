@@ -222,14 +222,14 @@ class ServiceCard(QWidget):
             row = QWidget()
             layout = QHBoxLayout(row)
             layout.setContentsMargins(0, 0, 0, 0)
-            state = 'Cloudflare: нужна проверка в браузере' if candidate.get('browser_required') else candidate['status']
+            state = 'Cloudflare: доступ не подтверждён' if candidate.get('browser_required') else candidate['status']
             label = QLabel(f"{candidate['provider_name']}  /  {candidate['ip']}  /  {state}")
             label.setTextFormat(Qt.PlainText)
             label.setWordWrap(True)
             label.setStyleSheet('font-size: 14px;')
             layout.addWidget(label, 1)
-            if candidate['status'] == 'OK' or candidate.get('routable') or candidate.get('browser_required'):
-                button = QPushButton('Попробовать' if candidate.get('browser_required') else 'Выбрать')
+            if candidate['status'] == 'OK' or candidate.get('routable'):
+                button = QPushButton('Выбрать')
                 button.clicked.connect(lambda checked=False, c=candidate:
                     self.apply_ip_requested.emit(self.service.id, c['ip'], c['provider_name']))
                 layout.addWidget(button)

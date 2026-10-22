@@ -144,10 +144,8 @@ class StorageManager:
             self.save_config()
 
         if self.config.catalog_revision < 6:
-            # Старые версии оставляли EU/US выключенными, обрезая пул до двух маршрутов.
-            for region in ('ru', 'eu', 'us'):
-                self.config.providers_enabled['geohide-' + region] = True
-            self.config.providers_enabled['google-public-dns'] = True
+            # Обновление базы не переопределяет выбранные пользователем регионы.
+            self.config.providers_enabled.setdefault('google-public-dns', True)
             self.config.rejected_routes.clear()
             self.config.catalog_revision = 6
             self.save_config()

@@ -74,21 +74,19 @@ class VerificationWorker(QThread):
         except OSError:
             return []
 
-    def _domain_route(self, check, selected, entries, current=False, required=True, service_id=None,
-                      allow_browser=False):
+    def _domain_route(self, check, selected, entries, current=False, required=True, service_id=None):
         domain, path, label, codes = check
         self.cancellation.check()
         provider_name = selected.provider_name
         names = {}
-        provider_ids = {}
         if current:
             ips = entries.get(domain, []) or self._resolve(domain)
         else:
             if required:
-                alternatives = self.provider_manager.get_candidates(domain, self.cancellation)
+                alternatives = [c for c in self.provider_manager.get_candidates(domain, self.cancellation)
+                                if c.provider_id == selected.provider_id]
                 ips = [c.ip for c in alternatives]
                 names = {c.ip: c.provider_name for c in alternatives}
-                provider_ids = {c.ip: c.provider_id for c in alternatives}
                 if not ips and self.forced:
                     ips = [selected.ip]
             else:
@@ -101,9 +99,8 @@ class VerificationWorker(QThread):
             return dict(domain=domain, label=label, ok=False, details='Нет адреса у провайдера')
         probes = parallel(ips, lambda ip: self._probe(ip, domain, path, codes),
                           self.cancellation, timeout=3.0, limit=64)
-        good = min((r for r in probes if r and (r.is_routable or (allow_browser and r.is_browser_challenge))),
-                   key=lambda r: (not r.is_routable, self._provider_rank(provider_ids.get(r.ip, selected.provider_id)),
-                                  r.latency_ms), default=None)
+        good = min((r for r in probes if r and r.is_routable),
+                   key=lambda r: (r.ip != selected.ip, r.latency_ms), default=None)
         last = good or next((r for r in probes if r), None)
         return dict(domain=domain, label=label, ok=bool(good), ip=good.ip if good else '',
                     provider=names.get(good.ip, provider_name) if good else provider_name,
@@ -119,7 +116,6 @@ class VerificationWorker(QThread):
             summary['failed'] += 1
             return
         deadline = time.monotonic() + 24
-        allow_browser = self.auto_fix and (self.rotate or bool(self.forced))
         entries = self.hosts_manager.get_service_current_ips(service.domains)
         current_ips = entries.get(service.primary_domain, [])
         current_ip = current_ips[0] if current_ips else ''
@@ -206,11 +202,11 @@ class VerificationWorker(QThread):
         checked = []
         viable = []
         for candidate, probe in zip(candidates, results):
-            checked.append(dict(ip=candidate.ip, provider_name=candidate.provider_name,
+            checked.append(dict(ip=candidate.ip, provider_id=candidate.provider_id, provider_name=candidate.provider_name,
                 status=probe.status.value if probe else 'DEAD', latency_ms=probe.latency_ms if probe else 0,
                 details=probe.details if probe else 'Тайм-аут', routable=bool(probe and probe.is_routable),
                 browser_required=bool(probe and probe.is_browser_challenge)))
-            if probe and (probe.is_routable or (allow_browser and probe.is_browser_challenge)):
+            if probe and probe.is_routable:
                 viable.append((candidate, probe))
         # Работоспособность проверяем первой; задержка сортирует подходящие кандидаты.
         if not self.prefer_provider_order:
@@ -220,8 +216,11 @@ class VerificationWorker(QThread):
                                           item[1].latency_ms))
         selected = best = report = None
         failure_report = []
+        failed_providers = set()
         for candidate, probe in viable:
             self.cancellation.check()
+            if candidate.provider_id in failed_providers:
+                continue
             if time.monotonic() >= deadline - 2:
                 break
             self.progress.emit(self.services.index(service) + 1, len(self.services),
@@ -229,7 +228,7 @@ class VerificationWorker(QThread):
             current = candidate.provider_id == 'current'
             other_checks = [check for check in checks if check[0] != service.primary_domain]
             reports = parallel(other_checks, lambda check: self._domain_route(check, candidate, entries, current,
-                               service_id=service.id, allow_browser=allow_browser),
+                               service_id=service.id),
                                self.cancellation, timeout=min(7.5, max(.1, deadline - time.monotonic())), limit=8)
             reports = [r or dict(domain=c[0], label=c[2], ok=False, details='Тайм-аут')
                        for c, r in zip(other_checks, reports)]
@@ -241,13 +240,13 @@ class VerificationWorker(QThread):
                 selected, best, report = candidate, probe, reports
                 break
             for row in checked:
-                if row['ip'] == candidate.ip:
+                if row['provider_id'] == candidate.provider_id:
                     row['routable'] = False
                     row['status'] = 'DEAD'
                     row['details'] = '; '.join(r['domain'] + ': ' + r['details'] for r in reports if not r['ok'])
-            if not self.forced and not current:
-                # Критичные узлы уже проверены по всему пулу, повтор для другого IP витрины бессмыслен.
-                break
+            # У этого провайдера проверен весь пул критичных доменов.
+            # Следующий провайдер может иметь рабочий вход/API, даже если первый не подошёл.
+            failed_providers.add(candidate.provider_id)
         self.cancellation.check()
         self.candidates_ready.emit(service.id, checked)
         if selected is None:
@@ -286,7 +285,7 @@ class VerificationWorker(QThread):
                 1 if any(part in d for part in ('cdn.', 'static', 'assets.', 'auth.', 'api.')) else 2, d))
             self.progress.emit(self.services.index(service) + 1, len(self.services), service.name + ': ресурсы и CDN')
             extras = parallel(extra, lambda d: self._domain_route((d, '/', d, (401, 404, 302, 307)),
-                selected, entries, required=False, service_id=service.id, allow_browser=allow_browser), self.cancellation,
+                selected, entries, required=False, service_id=service.id), self.cancellation,
                 timeout=min(7, max(.1, deadline - time.monotonic())), limit=8)
             for row in extras:
                 if row and row['ok']:

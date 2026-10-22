@@ -68,6 +68,16 @@ class TestProviders(unittest.TestCase):
         eu_ips = [c.ip for c in eu_cands]
         self.assertIn("5.175.161.40", eu_ips)
 
+    def test_public_dns_and_matching_origin_addresses_are_not_bypass_routes(self):
+        manager = ProviderManager()
+        google = manager.get_provider('google-public-dns')
+        smart = manager.get_provider('dns-ai')
+        for provider in manager.list_providers():
+            provider.enabled = provider in (google, smart)
+        with patch.object(google, 'fetch_candidates', return_value=[CandidateIP('8.8.8.8', google.id, google.name)]), \
+             patch.object(smart, 'fetch_candidates', return_value=[CandidateIP('8.8.8.8', smart.id, smart.name), CandidateIP('1.1.1.1', smart.id, smart.name)]):
+            self.assertEqual([c.ip for c in manager.get_candidates('example.com')], ['1.1.1.1'])
+
     def test_provider_manager_dedup_and_priority(self):
         manager = ProviderManager()
         with patch.object(GeoHideProvider, 'fetch_candidates', return_value=[CandidateIP('1.1.1.1', 'geohide-ru', 'GeoHide')]), \

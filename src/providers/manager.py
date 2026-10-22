@@ -86,6 +86,10 @@ class ProviderManager:
             return value
 
         batches = parallel(sorted_providers, fetch, cancellation, timeout=4.0)
+        # Обычный DNS нужен для сравнения. Его нативные адреса не являются GEO-прокси,
+        # даже если другой резолвер вернул тот же IP и главная страница отвечает.
+        origin_ips = {c.ip for p, batch in zip(sorted_providers, batches)
+                      if p.id == 'google-public-dns' for c in (batch or [])}
         for p, p_cands in zip(sorted_providers, batches):
             try:
                 p_cands = p_cands or []
@@ -93,6 +97,8 @@ class ProviderManager:
                     try:
                         c.ip = public_ip(c.ip)
                     except ValueError:
+                        continue
+                    if p.id == 'google-public-dns' or c.ip in origin_ips:
                         continue
                     if c.ip not in seen_ips:
                         seen_ips.add(c.ip)
