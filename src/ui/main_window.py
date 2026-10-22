@@ -514,6 +514,8 @@ class MainWindow(QMainWindow):
             card = self.service_cards.get(service_id)
             if card:
                 card.result_label.setText(result.details)
+                card.help_label.setText(getattr(result, 'outcome', 'IP не изменён'))
+                card.help_label.show()
             return
         self._session_results[service_id] = (result, prov_name)
         card = self.service_cards.get(service_id)

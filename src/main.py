@@ -22,6 +22,23 @@ from providers.custom import CustomProvider
 from ui.main_window import MainWindow
 
 
+def _remove_retired_twitch(hosts_manager, storage):
+    # Удаляем только собственный блок; сторонние записи Twitch сохраняются.
+    removed = hosts_manager.remove_service_entries('Twitch', [])
+    config = storage.config
+    changed = removed or 'twitch' in config.active_routes or 'twitch' in config.rejected_routes
+    changed = changed or 'twitch' in config.favorites or 'twitch' in config.hidden_services
+    changed = changed or any(s.get('id') == 'twitch' for s in config.custom_services)
+    config.active_routes.pop('twitch', None)
+    config.rejected_routes.pop('twitch', None)
+    config.favorites = [sid for sid in config.favorites if sid != 'twitch']
+    config.hidden_services = [sid for sid in config.hidden_services if sid != 'twitch']
+    config.custom_services = [s for s in config.custom_services if s.get('id') != 'twitch']
+    if changed:
+        storage.save_config()
+    return removed
+
+
 def main():
     parser = argparse.ArgumentParser(description="DNS Switcher - Smart DNS & Hosts Manager")
     parser.add_argument("--hosts-path", type=str, default=None, help="Custom path to hosts file (for testing/mocking)")
@@ -72,6 +89,12 @@ def main():
     # 2. Initialize HostsManager (with safe user-writable backup dir)
     backup_dir = str(storage.data_dir / "backups")
     hosts_mgr = HostsManager(hosts_path=args.hosts_path, backup_dir=backup_dir)
+    try:
+        _remove_retired_twitch(hosts_mgr, storage)
+    except (OSError, ValueError) as error:
+        from PySide6.QtWidgets import QMessageBox
+        QMessageBox.warning(None, 'Очистка Twitch',
+                            'Не удалось удалить старые записи Twitch из hosts: ' + str(error))
 
     # 3. Initialize ProviderManager
     cache_dir = str(storage.data_dir / "cache")

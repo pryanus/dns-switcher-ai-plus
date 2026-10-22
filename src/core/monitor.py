@@ -74,7 +74,8 @@ class VerificationWorker(QThread):
         except OSError:
             return []
 
-    def _domain_route(self, check, selected, entries, current=False, required=True, service_id=None):
+    def _domain_route(self, check, selected, entries, current=False, required=True, service_id=None,
+                      allow_browser=False):
         domain, path, label, codes = check
         self.cancellation.check()
         provider_name = selected.provider_name
@@ -100,14 +101,14 @@ class VerificationWorker(QThread):
             return dict(domain=domain, label=label, ok=False, details='Нет адреса у провайдера')
         probes = parallel(ips, lambda ip: self._probe(ip, domain, path, codes),
                           self.cancellation, timeout=3.0, limit=64)
-        good = min((r for r in probes if r and r.is_routable),
-                   key=lambda r: (self._provider_rank(provider_ids.get(r.ip, selected.provider_id)),
+        good = min((r for r in probes if r and (r.is_routable or (allow_browser and r.is_browser_challenge))),
+                   key=lambda r: (not r.is_routable, self._provider_rank(provider_ids.get(r.ip, selected.provider_id)),
                                   r.latency_ms), default=None)
         last = good or next((r for r in probes if r), None)
         return dict(domain=domain, label=label, ok=bool(good), ip=good.ip if good else '',
                     provider=names.get(good.ip, provider_name) if good else provider_name,
                     details=last.details if last else 'Тайм-аут',
-                    challenge=bool(good and good.status == ServiceStatus.PARTIAL))
+                    challenge=bool(good and good.is_browser_challenge))
 
     def _check_service(self, service, summary):
         if service.routing_mode != 'geo':
@@ -118,6 +119,7 @@ class VerificationWorker(QThread):
             summary['failed'] += 1
             return
         deadline = time.monotonic() + 24
+        allow_browser = self.auto_fix and (self.rotate or bool(self.forced))
         entries = self.hosts_manager.get_service_current_ips(service.domains)
         current_ips = entries.get(service.primary_domain, [])
         current_ip = current_ips[0] if current_ips else ''
@@ -206,12 +208,14 @@ class VerificationWorker(QThread):
         for candidate, probe in zip(candidates, results):
             checked.append(dict(ip=candidate.ip, provider_name=candidate.provider_name,
                 status=probe.status.value if probe else 'DEAD', latency_ms=probe.latency_ms if probe else 0,
-                details=probe.details if probe else 'Тайм-аут', routable=bool(probe and probe.is_routable)))
-            if probe and probe.is_routable:
+                details=probe.details if probe else 'Тайм-аут', routable=bool(probe and probe.is_routable),
+                browser_required=bool(probe and probe.is_browser_challenge)))
+            if probe and (probe.is_routable or (allow_browser and probe.is_browser_challenge)):
                 viable.append((candidate, probe))
         # Работоспособность проверяем первой; задержка сортирует подходящие кандидаты.
         if not self.prefer_provider_order:
-            viable.sort(key=lambda item: (item[0].ip in rejected,
+            viable.sort(key=lambda item: (not item[1].is_routable,
+                                          item[0].ip in rejected,
                                           self._provider_rank(item[0].provider_id),
                                           item[1].latency_ms))
         selected = best = report = None
@@ -224,13 +228,14 @@ class VerificationWorker(QThread):
                                service.name + ': вход, API, файлы — ' + candidate.provider_name)
             current = candidate.provider_id == 'current'
             other_checks = [check for check in checks if check[0] != service.primary_domain]
-            reports = parallel(other_checks, lambda check: self._domain_route(check, candidate, entries, current, service_id=service.id),
+            reports = parallel(other_checks, lambda check: self._domain_route(check, candidate, entries, current,
+                               service_id=service.id, allow_browser=allow_browser),
                                self.cancellation, timeout=min(7.5, max(.1, deadline - time.monotonic())), limit=8)
             reports = [r or dict(domain=c[0], label=c[2], ok=False, details='Тайм-аут')
                        for c, r in zip(other_checks, reports)]
             reports.insert(0, dict(domain=service.primary_domain, label=primary[2], ok=True,
                 ip=candidate.ip, provider=candidate.provider_name, details=probe.details,
-                challenge=probe.status == ServiceStatus.PARTIAL))
+                challenge=probe.is_browser_challenge))
             failure_report = reports
             if all(r['ok'] for r in reports):
                 selected, best, report = candidate, probe, reports
@@ -258,6 +263,9 @@ class VerificationWorker(QThread):
             result.confirmable = bool(current_ip)
             result.alternative_failed = self.rotate
             result.route_message = 'Других маршрутов нет' if self.rotate else 'Подбор без изменений'
+            result.pool_size = len(pool)
+            result.checked_count = len(checked)
+            result.outcome = f'IP не изменён · проверено {len(checked)} из {len(pool)} адресов'
             self.service_result.emit(service.id, result, '')
             summary['failed'] += 1
             return
@@ -278,7 +286,7 @@ class VerificationWorker(QThread):
                 1 if any(part in d for part in ('cdn.', 'static', 'assets.', 'auth.', 'api.')) else 2, d))
             self.progress.emit(self.services.index(service) + 1, len(self.services), service.name + ': ресурсы и CDN')
             extras = parallel(extra, lambda d: self._domain_route((d, '/', d, (401, 404, 302, 307)),
-                selected, entries, required=False, service_id=service.id), self.cancellation,
+                selected, entries, required=False, service_id=service.id, allow_browser=allow_browser), self.cancellation,
                 timeout=min(7, max(.1, deadline - time.monotonic())), limit=8)
             for row in extras:
                 if row and row['ok']:
@@ -298,11 +306,19 @@ class VerificationWorker(QThread):
         confirmed = bool(old.get('confirmed') and old.get('domain_ips') == mappings and
                          old.get('ip') == selected.ip)
         conflicts = self.hosts_manager.get_conflicts(mappings)
-        best.status = ServiceStatus.OK
+        browser_required = any(row.get('challenge') for row in report)
+        best.status = ServiceStatus.PARTIAL if browser_required else ServiceStatus.OK
         best.applied = self.auto_fix
         best.is_current = not self.auto_fix
-        best.confirmable = (self.auto_fix or bool(current_ip)) and not bool(conflicts)
-        best.details = '\n'.join(r['label'] + ': ' + ('HTTPS доступен' if r['ok'] else r['details']) +
+        best.confirmable = (self.auto_fix or bool(current_ip)) and not bool(conflicts) and not browser_required
+        best.pool_size = len(pool)
+        best.checked_count = len(checked)
+        best.browser_required = browser_required
+        best.route_message = 'Нужна браузерная проверка' if browser_required else ''
+        best.outcome = (f"{current_ip or 'Системный DNS'} → {selected.ip}" if self.auto_fix else selected.ip)
+        best.outcome += f' · проверено {len(checked)} из {len(pool)} адресов'
+        best.details = '\n'.join(r['label'] + ': ' + ('Cloudflare: доступ к функциям не подтверждён'
+            if r.get('challenge') else 'HTTPS доступен' if r['ok'] else r['details']) +
             ' · ' + r.get('provider', selected.provider_name) for r in report)
         best.details += '\n' + account_note(service.id)
         if conflicts:
@@ -311,8 +327,8 @@ class VerificationWorker(QThread):
             self.storage.set_active_route(service.id, selected.ip, selected.provider_name,
                                           best.status.value, best.latency_ms)
             route = self.storage.get_active_route(service.id)
-            route.update(domain_ips=mappings, details=best.details, confirmed=confirmed,
-                         checks=report, confirmable=not bool(conflicts))
+            route.update(domain_ips=mappings, details=best.details,
+                         checks=report, confirmable=best.confirmable, confirmed=confirmed and not browser_required)
             self.storage.save_config()
         self.service_result.emit(service.id, best, selected.provider_name)
         summary['fixed' if self.auto_fix else 'ok'] += 1

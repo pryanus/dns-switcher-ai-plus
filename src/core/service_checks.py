@@ -22,7 +22,7 @@ PROFILES = {
     ],
     'claude': [
         ('claude.ai', '/api/organizations', 'API аккаунта', (401,)),
-        ('cdn.claude.ai', '/', 'Ресурсы интерфейса', (404,)),
+        ('a-cdn.anthropic.com', '/', 'Ресурсы интерфейса', (404,)),
     ],
     'spotify': [
         ('open.spotify.com', '/', 'Веб-плеер', (302, 307)),

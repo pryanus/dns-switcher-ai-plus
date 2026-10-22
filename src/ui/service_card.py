@@ -152,7 +152,8 @@ class ServiceCard(QWidget):
     def toggle_expanded(self):
         self.is_expanded = not self.is_expanded
         self.detail_widget.setVisible(self.is_expanded)
-        self.expand_btn.setText('Свернуть' if self.is_expanded else 'Подробнее')
+        self.expand_btn.setText('Свернуть' if self.is_expanded else
+                               f'Подробнее ({len(self.candidates)})' if self.candidates else 'Подробнее')
 
     def set_current_ip(self, ip, route_info=None):
         self.current_ip = ip
@@ -171,12 +172,15 @@ class ServiceCard(QWidget):
                                details=result.details, provider_name=current_provider,
                                suggested=getattr(result, 'suggested', False),
                                route_message=getattr(result, 'route_message', ''),
+                               outcome=getattr(result, 'outcome', ''),
                                confirmable=getattr(result, 'confirmable', True))
         self.result_label.setText(result.details)
         self._update_display()
 
     def set_candidates(self, candidates):
         self.candidates = candidates
+        if not self.is_expanded:
+            self.expand_btn.setText(f'Подробнее ({len(candidates)})' if candidates else 'Подробнее')
         self._render_candidates()
 
     def _update_display(self):
@@ -202,8 +206,8 @@ class ServiceCard(QWidget):
         self.feedback_row.setVisible(True)
         self.next_btn.setEnabled(self.service.routing_mode == 'geo')
 
-        self.help_label.clear()
-        self.help_label.hide()
+        self.help_label.setText(self.route_info.get('outcome', ''))
+        self.help_label.setVisible(bool(self.help_label.text()))
         self.status_badge.setText(label)
         self.status_badge.setVisible(self._has_fresh_result and bool(label))
         self.status_badge.setStyleSheet(f'font-size: 14px; color: {color};')
@@ -218,13 +222,14 @@ class ServiceCard(QWidget):
             row = QWidget()
             layout = QHBoxLayout(row)
             layout.setContentsMargins(0, 0, 0, 0)
-            label = QLabel(f"{candidate['provider_name']}  /  {candidate['ip']}  /  {candidate['status']}")
+            state = 'Cloudflare: нужна проверка в браузере' if candidate.get('browser_required') else candidate['status']
+            label = QLabel(f"{candidate['provider_name']}  /  {candidate['ip']}  /  {state}")
             label.setTextFormat(Qt.PlainText)
             label.setWordWrap(True)
             label.setStyleSheet('font-size: 14px;')
             layout.addWidget(label, 1)
-            if candidate['status'] == 'OK' or candidate.get('routable'):
-                button = QPushButton('Выбрать')
+            if candidate['status'] == 'OK' or candidate.get('routable') or candidate.get('browser_required'):
+                button = QPushButton('Попробовать' if candidate.get('browser_required') else 'Выбрать')
                 button.clicked.connect(lambda checked=False, c=candidate:
                     self.apply_ip_requested.emit(self.service.id, c['ip'], c['provider_name']))
                 layout.addWidget(button)

@@ -21,7 +21,7 @@ class TestProviders(unittest.TestCase):
         for region in ('ru', 'eu', 'us'):
             known.update(parse_hosts((assets / f'geohide_{region}.txt').read_text(encoding='utf-8')))
         declared = {row['name'].casefold() for row in json.loads((assets / 'zapret_services.json').read_text(encoding='utf-8'))}
-        aliases = {'sora': 'chatgpt & sora (openai)', 'twitch': 'twitch'}
+        aliases = {'sora': 'chatgpt & sora (openai)'}
         for service in Catalog().list_all():
             self.assertTrue(service.primary_domain in known or aliases.get(service.id) in declared, service.id)
 
@@ -33,6 +33,19 @@ class TestProviders(unittest.TestCase):
         google = manager.get_provider('google-public-dns')
         self.assertEqual(google.endpoint_or_ip, 'https://dns.google/dns-query')
         self.assertLess(google.priority, manager.get_provider('dns-ai').priority)
+
+    def test_required_auxiliary_checks_exist_in_published_provider_hosts(self):
+        from core.catalog import Catalog
+        from core.service_checks import checks_for
+        from core.validation import parse_hosts
+        assets = Path(__file__).resolve().parents[1] / 'src/assets'
+        known = set()
+        for filename in ('malw_hosts.txt', 'geohide_ru.txt', 'geohide_eu.txt', 'geohide_us.txt'):
+            known.update(parse_hosts((assets / filename).read_text(encoding='utf-8')))
+        for service in Catalog().list_all():
+            for domain, *_ in checks_for(service):
+                if domain != service.primary_domain:
+                    self.assertIn(domain, known, f'{service.id}: invented required endpoint {domain}')
 
     def test_geohide_regional_candidates(self):
         p_ru = GeoHideProvider(region="RU")

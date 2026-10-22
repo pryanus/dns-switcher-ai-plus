@@ -139,6 +139,7 @@ class TestUIHeadless(unittest.TestCase):
             self.assertEqual(scroll.value(), position)
             result = VerificationResult('8.8.4.4', card.service.primary_domain, ServiceStatus.OK, 10)
             result.applied = True
+            result.outcome = '1.1.1.1 → 8.8.4.4 · проверено 18 из 19 адресов'
             self.window._on_worker_service_result('spotify', result, 'Alternative')
             self.window._on_worker_finished(dict(total=1, fixed=1))
             self.window._on_worker_thread_finished()
@@ -203,6 +204,23 @@ class TestUIHeadless(unittest.TestCase):
         self.assertIn('1.1.1.1', card.ip_badge.text())
         card.fav_btn.click()
         self.assertNotIn('gemini', self.storage.config.favorites)
+
+    def test_switched_ip_and_pool_count_are_visible_on_card(self):
+        from core.verifier import VerificationResult, ServiceStatus
+        card = self.window.service_cards['claude']
+        card.set_current_ip('1.1.1.1')
+        result = VerificationResult('8.8.4.4', 'claude.ai', ServiceStatus.PARTIAL, 10)
+        result.applied = True
+        result.route_message = 'Нужна браузерная проверка'
+        result.outcome = '1.1.1.1 → 8.8.4.4 · проверено 19 из 20 адресов'
+        card.set_verification_result(result, 'GeoHide (EU)')
+        card.set_candidates([dict(ip='8.8.4.4', provider_name='GeoHide (EU)', status='PARTIAL',
+                                  browser_required=True) for _ in range(19)])
+        self.assertIn('8.8.4.4', card.ip_badge.text())
+        self.assertIn('1.1.1.1 → 8.8.4.4', card.help_label.text())
+        self.assertFalse(card.help_label.isHidden())
+        self.assertEqual(card.status_badge.text(), 'Нужна браузерная проверка')
+        self.assertIn('19', card.expand_btn.text())
 
     def test_add_dialog_flow(self):
         dlg = AddDialog(existing_categories=["AI", "Dev"], parent=self.window)

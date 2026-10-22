@@ -59,6 +59,12 @@ class VerificationResult:
     def is_routable(self) -> bool:
         return self.status == ServiceStatus.OK
 
+    @property
+    def is_browser_challenge(self) -> bool:
+        return (self.status == ServiceStatus.PARTIAL and self.stage_reached == 'HTTP'
+                and self.http_code in (200, 403, 503)
+                and self.details.startswith('Cloudflare challenge:'))
+
     def __repr__(self):
         return f"<VerificationResult {self.domain} via {self.ip}: {self.status.value} ({self.latency_ms}ms) - {self.details}>"
 

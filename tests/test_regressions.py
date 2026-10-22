@@ -176,15 +176,35 @@ class Regressions(unittest.TestCase):
             self.hm.update_service_ip('Example', '1.1.1.1', ['example.com'])
         self.assertEqual(self.hosts.read_bytes(), original)
 
+    def test_retired_twitch_cleanup_preserves_foreign_entries_and_other_services(self):
+        from main import _remove_retired_twitch
+        original = b'# Keep\r\n8.8.8.8 twitch.tv www.twitch.tv # User entry\r\n'
+        self.hosts.write_bytes(original)
+        self.hm.update_service_ip('Twitch', '1.1.1.1', ['www.twitch.tv', 'gql.twitch.tv'])
+        self.hm.update_service_ip('Example', '9.9.9.9', ['example.com'])
+        self.storage.config.active_routes['twitch'] = {'ip': '1.1.1.1'}
+        self.storage.config.active_routes['example'] = {'ip': '9.9.9.9'}
+        self.storage.config.favorites.append('twitch')
+        self.assertTrue(_remove_retired_twitch(self.hm, self.storage))
+        self.assertTrue(self.hosts.read_bytes().endswith(original))
+        self.assertNotIn('DNS Switcher Managed: Twitch', self.hosts.read_text())
+        self.assertEqual(self.hm.parse_all_entries()['example.com'], ['9.9.9.9'])
+        self.assertNotIn('twitch', self.storage.config.active_routes)
+        self.assertNotIn('twitch', self.storage.config.favorites)
+        self.assertIn('example', self.storage.config.active_routes)
+        before = self.hosts.read_bytes()
+        self.assertFalse(_remove_retired_twitch(self.hm, self.storage))
+        self.assertEqual(self.hosts.read_bytes(), before)
+
     def test_catalog_focus_and_stable_priority(self):
         services = Catalog().list_all()
-        self.assertEqual(len(services), 20)
+        self.assertEqual(len(services), 19)
         self.assertEqual([s.id for s in services[:4]], ['chatgpt', 'gemini', 'claude', 'elevenlabs'])
         self.assertEqual({s.id for s in Catalog().list_favorites()}, {'spotify', 'chatgpt', 'gemini', 'claude'})
-        self.assertTrue({'steam', 'ea', 'battlenet', 'epicgames', 'xbox', 'playstation', 'twitter', 'youtube', 'discord', 'opencode', 'windsurf', 'disneyplus', 'paramountplus'}.isdisjoint({s.id for s in services}))
+        self.assertTrue({'steam', 'ea', 'battlenet', 'epicgames', 'xbox', 'playstation', 'twitter', 'youtube', 'discord', 'twitch', 'opencode', 'windsurf', 'disneyplus', 'paramountplus'}.isdisjoint({s.id for s in services}))
         self.assertEqual(len({s.id for s in services}), len(services))
         self.assertEqual(sum(s.category == 'Нейросети' for s in services), 14)
-        self.assertEqual(sum(s.category == 'Музыка, видео и общение' for s in services), 6)
+        self.assertEqual(sum(s.category == 'Музыка, видео и общение' for s in services), 5)
 
     def test_existing_favorites_migrate_once_without_changing_routes(self):
         import json
@@ -238,18 +258,60 @@ class Regressions(unittest.TestCase):
             self.assertTrue(client.call_args.kwargs['http2'])
             self.assertIsNone(provider.last_error)
 
-    def test_cloudflare_route_is_not_applied(self):
+    def test_cloudflare_route_is_not_applied_without_an_explicit_switch(self):
         service = ServiceDef(id='gemini', name='Gemini', category='AI',
                              primary_domain='gemini.google.com', domains=['gemini.google.com'])
-        worker = VerificationWorker([service], self.hm, self.providers, self.storage, True,
-                                    forced=('1.1.1.1', 'DNS-AI'))
+        worker = VerificationWorker([service], self.hm, self.providers, self.storage, True)
         challenge = VerificationResult('1.1.1.1', service.primary_domain, ServiceStatus.PARTIAL,
-            1, 'HTTP 403 (Cloudflare challenge active)', 'HTTP', 403)
+            1, 'Cloudflare challenge: JavaScript required', 'HTTP', 403)
         self.assertFalse(challenge.is_routable)
-        with patch.object(ServiceVerifier, 'verify_candidate', return_value=challenge):
+        with patch.object(self.providers, 'get_candidates', return_value=[CandidateIP('1.1.1.1', 'manual', 'Test')]), \
+             patch.object(ServiceVerifier, 'verify_candidate', return_value=challenge):
             worker.run()
         self.assertNotIn(service.primary_domain, self.hm.parse_all_entries())
         self.assertIsNone(self.storage.get_active_route('gemini'))
+
+    def test_verified_response_has_priority_over_cloudflare_challenge(self):
+        self.hm.update_service_ip('Example', '9.9.9.9', self.service.domains)
+        candidates = [CandidateIP('1.1.1.1', 'geohide-eu', 'GeoHide'),
+                      CandidateIP('8.8.4.4', 'manual', 'Other')]
+        worker = VerificationWorker([self.service], self.hm, self.providers, self.storage, True, rotate=True)
+        def probe(ip, domain, **kwargs):
+            if ip == '1.1.1.1':
+                return VerificationResult(ip, domain, ServiceStatus.PARTIAL, 10,
+                    'Cloudflare challenge: browser required', 'HTTP', 403)
+            return self._result(ip, domain, ServiceStatus.OK)
+        with patch.object(self.providers, 'get_candidates', return_value=candidates), \
+             patch.object(ServiceVerifier, 'verify_candidate', side_effect=probe):
+            worker.run()
+        route = self.storage.get_active_route(self.service.id)
+        self.assertEqual(route['ip'], '8.8.4.4')
+        self.assertEqual(route['status'], 'OK')
+
+    def test_explicit_rotation_changes_ip_for_every_builtin_service(self):
+        pool = [CandidateIP(ip, 'manual', 'Test') for ip in ('1.1.1.1', '8.8.4.4', '9.9.9.9')]
+        def challenge(ip, domain, **kwargs):
+            return VerificationResult(ip, domain, ServiceStatus.PARTIAL, 10,
+                                      'Cloudflare challenge: JavaScript required', 'HTTP', 403)
+        for service in Catalog().list_all():
+            with self.subTest(service=service.id):
+                self.hosts.write_text('127.0.0.1 localhost\n')
+                self.hm.update_service_ip(service.name, '1.1.1.1', service.domains)
+                previous = '1.1.1.1'
+                self.storage.config.rejected_routes[service.id] = []
+                for _ in range(2):
+                    self.storage.config.rejected_routes[service.id].append(previous)
+                    worker = VerificationWorker([service], self.hm, self.providers, self.storage, True, rotate=True)
+                    with patch.object(self.providers, 'get_candidates', return_value=pool), \
+                         patch.object(ServiceVerifier, 'verify_candidate', side_effect=challenge):
+                        worker.run()
+                    route = self.storage.get_active_route(service.id)
+                    self.assertIsNotNone(route)
+                    self.assertNotEqual(route['ip'], previous)
+                    self.assertEqual(route['status'], 'PARTIAL')
+                    self.assertFalse(route['confirmed'])
+                    self.assertEqual(self.hm.parse_all_entries()[service.primary_domain][0], route['ip'])
+                    previous = route['ip']
 
     def test_api_failure_rejects_a_working_homepage(self):
         self.hosts.write_text('127.0.0.1 localhost\n')
