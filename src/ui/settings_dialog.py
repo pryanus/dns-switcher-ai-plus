@@ -16,6 +16,7 @@ from providers.manager import ProviderManager
 
 
 class SettingsDialog(QDialog):
+    app_update_requested = Signal(str, str)
     db_updated = Signal()
     backup_restored = Signal()
     hosts_imported = Signal(str)
@@ -40,6 +41,8 @@ class SettingsDialog(QDialog):
         self.provider_manager = provider_manager
 
         self.update_worker = None
+        self.app_update_worker = None
+        self.available_release = None
         self._closing = False
         self._init_ui()
 
@@ -65,11 +68,15 @@ class SettingsDialog(QDialog):
         self._init_backup_tab(backup_tab)
         tabs.addTab(backup_tab, "Бэкапы hosts")
 
+        app_tab = QWidget()
+        self._init_app_update_tab(app_tab)
+        tabs.addTab(app_tab, 'Обновление')
         main_layout.addWidget(tabs)
 
         # Bottom buttons
         btn_layout = QHBoxLayout()
-        ver_lbl = QLabel("Версия 1.2.1 · DNS Switcher AI+", self)
+        from core.updater import VERSION
+        ver_lbl = QLabel(f'Версия {VERSION} · DNS Switcher AI+', self)
         ver_lbl.setStyleSheet("color: #aaaab2; font-size: 14px;")
         btn_layout.addWidget(ver_lbl)
         btn_layout.addStretch()
@@ -80,6 +87,67 @@ class SettingsDialog(QDialog):
         btn_layout.addWidget(close_btn)
 
         main_layout.addLayout(btn_layout)
+
+    def _init_app_update_tab(self, tab):
+        from core.updater import VERSION
+        layout = QVBoxLayout(tab)
+        layout.addWidget(QLabel(f'Установлена версия {VERSION}'))
+        self.app_update_status = QLabel('Проверка стабильной версии в sasha59/dns-switcher-ai-plus.')
+        self.app_update_status.setWordWrap(True)
+        layout.addWidget(self.app_update_status)
+        self.check_app_btn = QPushButton('Проверить обновления')
+        self.check_app_btn.clicked.connect(lambda: self._start_app_update(False))
+        layout.addWidget(self.check_app_btn)
+        self.install_app_btn = QPushButton('Скачать и установить')
+        self.install_app_btn.setEnabled(False)
+        self.install_app_btn.clicked.connect(lambda: self._start_app_update(True))
+        layout.addWidget(self.install_app_btn)
+        note = QLabel('Обновление загрузится с GitHub, пройдёт проверку SHA-256 и заменит EXE после выхода. '
+                      'Программа перезапустится; прежний EXE сохранится рядом как .previous-…')
+        note.setWordWrap(True)
+        layout.addWidget(note)
+        layout.addStretch()
+
+    def _start_app_update(self, install):
+        if self.app_update_worker is not None:
+            return
+        from core.updater import AppUpdateWorker
+        self.check_app_btn.setEnabled(False)
+        self.install_app_btn.setEnabled(False)
+        self.app_update_status.setText('Загрузка обновления…' if install else 'Проверка GitHub…')
+        worker = AppUpdateWorker(self.available_release if install else None, self)
+        self.app_update_worker = worker
+        worker.completed.connect(self._app_update_ready)
+        worker.failed.connect(self._app_update_failed)
+        worker.progress.connect(lambda value: self.app_update_status.setText(f'Загрузка: {value}%'))
+        worker.finished.connect(self._app_update_finished)
+        worker.start()
+
+    def _app_update_ready(self, result):
+        if self._closing:
+            return
+        if result.get('path'):
+            self.app_update_status.setText('Файл проверен. Перезапуск для установки…')
+            self.app_update_requested.emit(result['path'], result['sha256'])
+        elif result.get('available'):
+            self.available_release = result
+            self.app_update_status.setText(f"Доступна версия {result['version']} · {result['size'] / 1048576:.1f} МБ")
+        else:
+            self.available_release = None
+            self.app_update_status.setText('Установлена последняя стабильная версия.')
+
+    def _app_update_failed(self, message):
+        self.app_update_status.setText('Ошибка обновления: ' + message)
+
+    def _app_update_finished(self):
+        worker = self.app_update_worker
+        self.app_update_worker = None
+        if worker:
+            worker.deleteLater()
+        self.check_app_btn.setEnabled(True)
+        self.install_app_btn.setEnabled(bool(self.available_release))
+        if self._closing:
+            self.reject()
 
     def _init_prov_tab(self, tab: QWidget) -> None:
         layout = QVBoxLayout(tab)
@@ -241,6 +309,10 @@ class SettingsDialog(QDialog):
         self.db_updated.emit()
 
     def reject(self):
+        if self.app_update_worker and self.app_update_worker.isRunning():
+            self._closing = True
+            self.app_update_worker.cancel()
+            return
         if self.update_worker and self.update_worker.isRunning():
             self._closing = True
             self.update_worker.cancel()
@@ -248,6 +320,10 @@ class SettingsDialog(QDialog):
         super().reject()
 
     def accept(self):
+        if self.app_update_worker and self.app_update_worker.isRunning():
+            self._closing = True
+            self.app_update_worker.cancel()
+            return
         if self.update_worker and self.update_worker.isRunning():
             self._closing = True
             self.update_worker.cancel()

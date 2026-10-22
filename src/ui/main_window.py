@@ -361,7 +361,7 @@ class MainWindow(QMainWindow):
                              details='Маршрут отклонён: нужная функция не работает.')
         self.storage.save_config()
         self._populate_services()
-        if action == 'reject':
+        if action in ('reject', 'reset'):
             self._on_check_single_service(service_id)
 
     def _on_check_single_service(self, service_id: str) -> None:
@@ -490,6 +490,7 @@ class MainWindow(QMainWindow):
             provider_manager=self.provider_manager,
             parent=self
         )
+        dlg.app_update_requested.connect(self._install_app_update)
         dlg.hosts_imported.connect(self._on_hosts_imported)
         dlg.backup_restored.connect(self._populate_services)
         dlg.exec()
@@ -503,6 +504,15 @@ class MainWindow(QMainWindow):
             "Импорт hosts",
             f"Файл успешно разобран!\nОбнаружено сервисов: {len(parsed)}\nДобавлено новых в каталог: {added_count}"
         )
+
+    def _install_app_update(self, path, digest):
+        try:
+            from core.updater import launch_installer
+            launch_installer(path, digest)
+        except Exception as error:
+            QMessageBox.warning(self, 'Обновление не установлено', str(error))
+            return
+        self._exit_app()
 
     def _restore_from_tray(self) -> None:
         self.showNormal()

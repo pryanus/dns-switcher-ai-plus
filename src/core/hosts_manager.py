@@ -289,20 +289,21 @@ class HostsManager:
             raise ValueError("Повреждены границы блока DNS Switcher. Hosts не изменён.")
         # Новая общая обёртка содержит только принадлежащие приложению записи.
         wrapper = re.compile(r"^# === DNS Switcher Routes ===\r?\n"
-            r"# === End DNS Switcher Routes ===(?:\r?\n|$)", re.MULTILINE)
+            r"(?:[ \t]*\r?\n)*# === End DNS Switcher Routes ===(?:\r?\n|$)", re.MULTILINE)
         remaining = wrapper.sub('', remaining)
         if self.ROUTES_START in remaining or self.ROUTES_END in remaining:
             raise ValueError("Повреждён общий блок DNS Switcher. Hosts не изменён.")
         return sections, remaining
 
     def _write_managed(self, sections, original, encoding):
-        lines = [self.ROUTES_START]
+        lines = [self.ROUTES_START, '']
         for name, mappings in sections.items():
             if not mappings:
                 continue
             lines.append(f"{self.MANAGED_START_PREFIX}{name} ===")
-            lines.extend(f"{ip}\t{domain}" for domain, ip in sorted(mappings.items()))
+            lines.extend(f"{ip:<16} {domain}" for domain, ip in sorted(mappings.items()))
             lines.append(f"{self.MANAGED_END_PREFIX}{name} ===")
+            lines.append('')
         lines.append(self.ROUTES_END)
         prefix = "\r\n".join(lines) + "\r\n" if any(sections.values()) else ''
         self.write_file_safely(self.hosts_path, prefix + original, encoding)

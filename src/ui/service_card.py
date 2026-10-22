@@ -50,15 +50,6 @@ class ServiceCard(QWidget):
         self.fav_btn.setToolTip('Добавить или убрать из избранного')
         self.fav_btn.clicked.connect(self._on_fav_clicked)
         top.addWidget(self.fav_btn)
-        self.rotate_btn = QToolButton()
-        self.rotate_btn.setFixedSize(44, 44)
-        self.rotate_btn.setIconSize(QSize(20, 20))
-        self.rotate_btn.setIcon(QIcon(str(Path(__file__).resolve().parents[1] / 'assets' / 'refresh.svg')))
-        self.rotate_btn.setToolTip('Подобрать другой DNS из пула, если текущий не устроил')
-        self.rotate_btn.setAccessibleName('Подобрать другой DNS')
-        self.rotate_btn.setStyleSheet('background: #17283e; border: 1px solid #294b72; border-radius: 10px; padding: 10px;')
-        self.rotate_btn.clicked.connect(lambda: self.route_feedback.emit(service.id, 'reject'))
-        top.insertWidget(top.indexOf(self.fav_btn), self.rotate_btn)
         self.main_layout.addLayout(top)
 
         bottom = QHBoxLayout()
@@ -94,7 +85,9 @@ class ServiceCard(QWidget):
         open_btn.clicked.connect(lambda: QDesktopServices.openUrl(QUrl('https://' + service.primary_domain)))
         self.confirm_btn = QPushButton('Работает')
         self.confirm_btn.clicked.connect(lambda: self.route_feedback.emit(service.id, 'confirm'))
-        for button in (open_btn, self.confirm_btn):
+        self.next_btn = QPushButton('Другой маршрут')
+        self.next_btn.clicked.connect(lambda: self.route_feedback.emit(service.id, 'reject'))
+        for button in (open_btn, self.confirm_btn, self.next_btn):
             feedback_layout.addWidget(button)
         self.main_layout.addWidget(self.feedback_row)
 
@@ -125,8 +118,8 @@ class ServiceCard(QWidget):
         hide_btn = QPushButton('Скрыть сервис')
         hide_btn.setToolTip('Убрать из каталога, избранного и автоматического подбора. Записи hosts сохраняются.')
         hide_btn.clicked.connect(lambda: self.hide_requested.emit(service.id))
-        reset_btn = QPushButton('Сбросить пропуски')
-        reset_btn.setToolTip('Снова разрешить ранее отклонённые маршруты')
+        reset_btn = QPushButton('Начать пул сначала')
+        reset_btn.setToolTip('Сбросить пропуски и начать подбор с GeoHide по приоритету провайдеров')
         reset_btn.clicked.connect(lambda: self.route_feedback.emit(service.id, 'reset'))
         controls.addWidget(hide_btn)
         controls.addWidget(reset_btn)
@@ -143,8 +136,7 @@ class ServiceCard(QWidget):
             self.action_btn.setText('Подробнее')
             self.action_btn.clicked.disconnect()
             self.action_btn.clicked.connect(self.toggle_expanded)
-            self.rotate_btn.setEnabled(False)
-            self.rotate_btn.setToolTip(service.description)
+            self.next_btn.setEnabled(False)
 
     def _on_fav_clicked(self):
         self.service.is_favorite = self.fav_btn.isChecked()
@@ -202,12 +194,13 @@ class ServiceCard(QWidget):
                         'DEAD': ('Нет доступа', '#f08f8f')}.get(status, ('Не проверен', '#aaaab2'))
         if self.route_info.get('suggested'):
             label, color = 'Найден маршрут', '#79adff'
-        self.feedback_row.setVisible(bool(self.current_ip) or status == 'PARTIAL' or self.service.routing_mode != 'geo')
+        self.feedback_row.setVisible(True)
+        self.next_btn.setEnabled(self.service.routing_mode == 'geo')
         self.confirm_btn.setEnabled(bool(self.current_ip) and self.route_info.get('confirmable', True))
 
         message = ''
         if status == 'PARTIAL':
-            message = 'Откройте сервис, проверьте вход, запрос и файл. Затем «Работает» или синяя кнопка сверху.'
+            message = 'Откройте сервис, проверьте вход, запрос и файл. Затем «Работает» или «Другой маршрут».'
         elif status == 'DEAD':
             message = self.route_info.get('details', '').split('\n')[0]
         self.help_label.setText(message)

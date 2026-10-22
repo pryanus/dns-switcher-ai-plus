@@ -126,7 +126,10 @@ class TestUIHeadless(unittest.TestCase):
         self.window._route_feedback('chatgpt', 'confirm')
         self.assertTrue(StorageManager(str(self.data_dir)).get_active_route('chatgpt')['confirmed'])
         self.storage.config.rejected_routes['chatgpt'] = ['8.8.8.8']
-        self.window._route_feedback('chatgpt', 'reset')
+        from unittest.mock import patch
+        with patch.object(self.window, '_on_check_single_service') as start:
+            self.window._route_feedback('chatgpt', 'reset')
+            start.assert_called_once_with('chatgpt')
         self.assertNotIn('chatgpt', StorageManager(str(self.data_dir)).config.rejected_routes)
 
 

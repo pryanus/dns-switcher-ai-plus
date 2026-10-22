@@ -37,7 +37,8 @@ def main():
     QApplication.setAttribute(Qt.AA_DontUseNativeDialogs, True)
     app = QApplication(sys.argv)
     app.setApplicationName("DNS Switcher AI+")
-    app.setApplicationVersion("1.4.0")
+    from core.updater import VERSION
+    app.setApplicationVersion(VERSION)
     app.setOrganizationName("InternetHelper")
     app.setQuitOnLastWindowClosed(False)
 

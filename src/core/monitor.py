@@ -113,7 +113,9 @@ class VerificationWorker(QThread):
         rejected = set(self.storage.config.rejected_routes.get(service.id, []))
         # Подбор всегда перебирает провайдеров: рабочая витрина не доказывает работу приложения.
         if self.forced:
-            candidates = [CandidateIP(self.forced[0], 'manual', self.forced[1])]
+            provider_id = next((p.id for p in self.provider_manager.list_providers()
+                                if p.name == self.forced[1]), 'manual')
+            candidates = [CandidateIP(self.forced[0], provider_id, self.forced[1])]
         elif not self.auto_fix:
             resolved = parallel([service.primary_domain], self._resolve,
                                 self.cancellation, timeout=1.5)[0] if not current_ips else current_ips
@@ -121,7 +123,14 @@ class VerificationWorker(QThread):
                           for ip in (resolved or [])]
         else:
             candidates = self.provider_manager.get_candidates(service.primary_domain, self.cancellation)
-        candidates = [c for c in candidates if c.ip not in rejected]
+        pool = candidates
+        candidates = pool if self.forced else [c for c in pool if c.ip not in rejected]
+        if pool and not candidates and self.auto_fix and not self.forced:
+            # Закончен круг: ранее пропущенные маршруты снова доступны.
+            self.storage.config.rejected_routes.pop(service.id, None)
+            self.storage.save_config()
+            candidates = pool
+
         results = parallel(candidates, lambda c: self._probe(c.ip, primary[0], primary[1], primary[3]),
                            self.cancellation, timeout=3.0, limit=12)
         checked = []
@@ -132,11 +141,10 @@ class VerificationWorker(QThread):
                 details=probe.details if probe else 'Тайм-аут', routable=bool(probe and probe.is_routable)))
             if probe and probe.is_routable:
                 viable.append((candidate, probe))
-        # Приоритет: ответ без браузерной защиты, затем задержка.
-        viable.sort(key=lambda item: (item[1].status != ServiceStatus.OK, item[1].latency_ms))
+        # Сохраняем порядок пула провайдеров: повторные нажатия проходят его по кругу.
         selected = best = report = None
         failure_report = []
-        for candidate, probe in viable[:3]:
+        for candidate, probe in viable:
             self.cancellation.check()
             if time.monotonic() >= deadline - 2:
                 break

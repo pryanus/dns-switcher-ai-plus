@@ -63,7 +63,7 @@ class Regressions(unittest.TestCase):
         self.hm.update_service_ip('Example', '1.1.1.1', ['example.com'])
         self.hm.update_service_ip('Example', '8.8.4.4', ['example.com'])
         self.assertTrue(self.hosts.read_bytes().endswith(original))
-        self.assertEqual(self.hosts.read_text().count('8.8.4.4\texample.com'), 1)
+        self.assertEqual(self.hosts.read_text().count(f"{'8.8.4.4':<16} example.com"), 1)
         self.assertEqual(self.hm.get_conflicts({'example.com': '8.8.4.4'}), {'example.com': ['8.8.8.8']})
         self.hm.remove_service_entries('Example', ['example.com'])
         self.assertEqual(self.hosts.read_bytes(), original)
@@ -77,13 +77,13 @@ class Regressions(unittest.TestCase):
 
     def test_catalog_focus_and_stable_priority(self):
         services = Catalog().list_all()
-        self.assertEqual(len(services), 31)
+        self.assertEqual(len(services), 24)
         self.assertEqual([s.id for s in services[:4]], ['chatgpt', 'gemini', 'claude', 'elevenlabs'])
         self.assertEqual({s.id for s in Catalog().list_favorites()}, {'spotify', 'chatgpt', 'gemini', 'claude'})
-        self.assertTrue({'steam', 'ea', 'battlenet', 'epicgames', 'xbox', 'playstation', 'twitter', 'hume', 'opencode', 'cerebras'}.isdisjoint({s.id for s in services}))
+        self.assertTrue({'steam', 'ea', 'battlenet', 'epicgames', 'xbox', 'playstation', 'twitter', 'youtube', 'discord', 'hume', 'opencode', 'cerebras'}.isdisjoint({s.id for s in services}))
         self.assertEqual(len({s.id for s in services}), len(services))
-        self.assertEqual(sum(s.category == 'Нейросети' for s in services), 16)
-        self.assertEqual(sum(s.category == 'Музыка, видео и общение' for s in services), 15)
+        self.assertEqual(sum(s.category == 'Нейросети' for s in services), 11)
+        self.assertEqual(sum(s.category == 'Музыка, видео и общение' for s in services), 13)
 
     def test_existing_favorites_migrate_once_without_changing_routes(self):
         import json
@@ -230,7 +230,7 @@ class Regressions(unittest.TestCase):
             write.assert_not_called()
 
     def test_unsupported_streaming_and_dpi_never_rewrite_hosts(self):
-        services = [Catalog().get_service(sid) for sid in ('youtube', 'discord', 'netflix')]
+        services = [Catalog().get_service(sid) for sid in ('netflix',)]
         worker = VerificationWorker(services, self.hm, self.providers, self.storage, True)
         before = self.hosts.read_bytes()
         with patch.object(ServiceVerifier, 'verify_candidate') as probe:
@@ -310,6 +310,17 @@ class Regressions(unittest.TestCase):
             worker.start()
             worker.cancel()
             self.assertTrue(worker.wait(500))
+
+    def test_finished_pool_restarts_from_geohide_priority(self):
+        self.hosts.write_text('127.0.0.1 localhost\n')
+        self.storage.config.rejected_routes['example'] = ['1.1.1.1', '8.8.4.4']
+        candidates = [CandidateIP('1.1.1.1', 'manual', 'GeoHide'), CandidateIP('8.8.4.4', 'manual', 'DNS-AI')]
+        worker = VerificationWorker([self.service], self.hm, self.providers, self.storage, True)
+        with patch.object(self.providers, 'get_candidates', return_value=candidates), \
+             patch.object(ServiceVerifier, 'verify_candidate', side_effect=lambda ip, domain, **kw: self._result(ip, domain, ServiceStatus.OK)):
+            worker.run()
+        self.assertEqual(self.storage.get_active_route('example')['provider_name'], 'GeoHide')
+        self.assertNotIn('example', self.storage.config.rejected_routes)
 
     def test_cancel_closes_registered_socket(self):
         from core.network import Cancellation, Cancelled
