@@ -149,7 +149,7 @@ class Regressions(unittest.TestCase):
             worker.run()
         self.assertEqual(self.hm.parse_all_entries()[service.primary_domain], ['1.1.1.1'])
         self.assertEqual(self.storage.get_active_route('gemini')['provider_name'], 'DNS-AI')
-        self.assertEqual(self.storage.get_active_route('gemini')['status'], 'PARTIAL')
+        self.assertEqual(self.storage.get_active_route('gemini')['status'], 'OK')
 
     def test_api_failure_rejects_a_working_homepage(self):
         self.hosts.write_text('127.0.0.1 localhost\n')
@@ -278,8 +278,8 @@ class Regressions(unittest.TestCase):
         with patch.object(ServiceVerifier, 'verify_candidate', side_effect=probe):
             worker.run()
         self.assertEqual(self.hosts.read_bytes(), before)
-        self.assertEqual(self.storage.get_active_route('chatgpt')['status'], 'DEAD')
-        self.assertFalse(self.storage.get_active_route('chatgpt')['confirmed'])
+        self.assertEqual(self.storage.get_active_route('chatgpt')['status'], 'OK')
+        self.assertTrue(self.storage.get_active_route('chatgpt')['confirmed'])
 
     def test_cancel_does_not_wait_for_provider_query_or_write(self):
         from threading import Event
@@ -289,7 +289,7 @@ class Regressions(unittest.TestCase):
             entered.set()
             release.wait(2)
             return [CandidateIP('1.1.1.1', 'test', 'Test')]
-        worker = VerificationWorker([self.service], self.hm, self.providers, self.storage, True)
+        worker = VerificationWorker([self.service], self.hm, self.providers, self.storage, True, rotate=True)
         before = self.hosts.read_bytes()
         with patch.object(self.providers.get_provider('geohide-ru'), 'fetch_candidates', side_effect=slow):
             for provider in self.providers.list_providers():
@@ -310,6 +310,41 @@ class Regressions(unittest.TestCase):
             worker.start()
             worker.cancel()
             self.assertTrue(worker.wait(500))
+
+    def test_working_external_hosts_route_is_kept_without_fetching_a_pool(self):
+        before = self.hosts.read_bytes()
+        worker = VerificationWorker([self.service], self.hm, self.providers, self.storage, True)
+        results = []
+        worker.service_result.connect(lambda sid, result, provider: results.append(result))
+        with patch.object(self.providers, 'get_candidates') as pool, \
+             patch.object(ServiceVerifier, 'verify_candidate', side_effect=lambda ip, domain, **kw:
+                 self._result(ip, domain, ServiceStatus.OK)):
+            worker.run()
+            pool.assert_not_called()
+        self.assertEqual(before, self.hosts.read_bytes())
+        self.assertEqual(results[0].status, ServiceStatus.OK)
+        self.assertEqual(results[0].ip, '8.8.8.8')
+        self.assertFalse(results[0].applied)
+
+    def test_current_probe_failure_does_not_mark_service_as_inaccessible(self):
+        worker = VerificationWorker([self.service], self.hm, self.providers, self.storage, False)
+        results = []
+        worker.service_result.connect(lambda sid, result, provider: results.append(result))
+        with patch.object(ServiceVerifier, 'verify_candidate', side_effect=lambda ip, domain, **kw:
+                self._result(ip, domain, ServiceStatus.DEAD)):
+            worker.run()
+        self.assertEqual(results[0].status, ServiceStatus.UNKNOWN)
+
+    def test_new_selection_prefers_low_latency_after_validation(self):
+        self.hosts.write_text('127.0.0.1 localhost\n')
+        candidates = [CandidateIP('1.1.1.1', 'manual', 'Slow'), CandidateIP('8.8.4.4', 'manual', 'Fast')]
+        worker = VerificationWorker([self.service], self.hm, self.providers, self.storage, True, rotate=True)
+        def probe(ip, domain, **kwargs):
+            return VerificationResult(ip, domain, ServiceStatus.OK, 150 if ip == '1.1.1.1' else 20)
+        with patch.object(self.providers, 'get_candidates', return_value=candidates), \
+             patch.object(ServiceVerifier, 'verify_candidate', side_effect=probe):
+            worker.run()
+        self.assertEqual(self.storage.get_active_route('example')['ip'], '8.8.4.4')
 
     def test_finished_pool_restarts_from_geohide_priority(self):
         self.hosts.write_text('127.0.0.1 localhost\n')
@@ -389,7 +424,7 @@ class Regressions(unittest.TestCase):
         route = self.storage.get_active_route('example')
         self.assertEqual(route['ip'], '8.8.4.4')
         self.assertFalse(route['confirmed'])
-        self.assertEqual(route['status'], 'PARTIAL')
+        self.assertEqual(route['status'], 'OK')
         self.assertFalse(any(call.args[0] == '1.1.1.1' for call in probe.call_args_list))
         self.assertEqual(set(route['domain_ips']), set(self.service.domains))
 

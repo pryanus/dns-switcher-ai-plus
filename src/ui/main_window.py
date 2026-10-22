@@ -27,14 +27,15 @@ from ui.tray_icon import TrayIconManager
 
 
 class MainWindow(QMainWindow):
-    GITHUB_URL = "https://github.com/sasha59/dns-switcher-ai-plus"
+    GITHUB_URL = "https://github.com/pryanus/dns-switcher-ai-plus"
 
     def __init__(
         self,
         catalog: Catalog,
         hosts_manager: HostsManager,
         provider_manager: ProviderManager,
-        storage: StorageManager
+        storage: StorageManager,
+        auto_check: bool = False
     ):
         super().__init__()
         self.catalog = catalog
@@ -43,6 +44,7 @@ class MainWindow(QMainWindow):
         self.storage = storage
         self.catalog.hidden_services = set(storage.config.hidden_services)
         self._exiting = False
+        self._session_results = {}
 
         self.setWindowTitle("DNS Switcher AI+")
         self.resize(780, 790)
@@ -60,6 +62,15 @@ class MainWindow(QMainWindow):
         self._init_monitor()
         self.tab_bar.setCurrentIndex(0)
         self._populate_services()
+        if auto_check:
+            from PySide6.QtCore import QTimer
+            QTimer.singleShot(300, self._check_active_on_start)
+
+    def _check_active_on_start(self):
+        services = [s for s in self.catalog.list_favorites()
+                    if self.hosts_manager.get_service_current_ips([s.primary_domain]).get(s.primary_domain)]
+        if services and self.active_worker is None:
+            self._start_batch_worker(services, auto_fix=False, silent=True)
 
     def _init_ui(self) -> None:
         self.central_widget = QWidget(self)
@@ -269,6 +280,9 @@ class MainWindow(QMainWindow):
                         break
 
             card = ServiceCard(service=s, current_ip=current_ip, route_info=route_info)
+            previous = self._session_results.get(s.id)
+            if previous and (not current_ip or previous[0].ip == current_ip):
+                card.set_verification_result(previous[0], previous[1])
             card.check_requested.connect(self._on_check_single_service)
             card.apply_ip_requested.connect(self._on_apply_ip)
             card.favorite_toggled.connect(self._on_favorite_toggled)
@@ -344,12 +358,21 @@ class MainWindow(QMainWindow):
         if action == 'reset':
             self.storage.config.rejected_routes.pop(service_id, None)
         elif action == 'confirm':
-            if not route or not route.get('confirmable', False):
-                return
+            if not route:
+                actual = self.hosts_manager.get_service_current_ips([service.primary_domain]).get(service.primary_domain, [])
+                if not actual:
+                    return
+                self.storage.set_active_route(service_id, actual[0], 'Из hosts', 'OK', 0)
+                route = self.storage.get_active_route(service_id)
             actual = self.hosts_manager.get_service_current_ips([service.primary_domain]).get(service.primary_domain, [])
             if actual != [route.get('ip')]:
                 return
             route.update(confirmed=True, status='OK')
+            result = VerificationResult(actual[0], service.primary_domain, ServiceStatus.OK,
+                route.get('latency_ms', 0), 'Работа подтверждена пользователем.')
+            result.is_current = True
+            result.confirmable = True
+            self._session_results[service_id] = (result, route.get('provider_name', 'Из hosts'))
         elif action == 'reject':
             actual = self.hosts_manager.get_service_current_ips([service.primary_domain]).get(service.primary_domain, [])
             rejected = self.storage.config.rejected_routes.setdefault(service_id, [])
@@ -362,7 +385,7 @@ class MainWindow(QMainWindow):
         self.storage.save_config()
         self._populate_services()
         if action in ('reject', 'reset'):
-            self._on_check_single_service(service_id)
+            self._start_batch_worker([service], auto_fix=True, rotate=True, prefer_provider_order=(action == 'reset'))
 
     def _on_check_single_service(self, service_id: str) -> None:
         s = self.catalog.get_service(service_id)
@@ -393,7 +416,7 @@ class MainWindow(QMainWindow):
         all_s = self.catalog.list_all()
         self._start_batch_worker(all_s, auto_fix=True)
 
-    def _start_batch_worker(self, services: List[ServiceDef], auto_fix: bool = False, forced=None) -> None:
+    def _start_batch_worker(self, services: List[ServiceDef], auto_fix: bool = False, forced=None, rotate=False, prefer_provider_order=False, silent=False) -> None:
         if self.active_worker is not None:
             return
 
@@ -416,8 +439,9 @@ class MainWindow(QMainWindow):
             provider_manager=self.provider_manager,
             storage=self.storage,
             auto_fix=auto_fix,
-            parent=self, forced=forced
+            parent=self, forced=forced, rotate=rotate, prefer_provider_order=prefer_provider_order
         )
+        self.active_worker.silent = silent
         self.active_worker.candidates_ready.connect(self._on_candidates_ready)
         self.active_worker.finished.connect(self._on_worker_thread_finished)
         self.active_worker.progress.connect(self._on_worker_progress)
@@ -440,6 +464,13 @@ class MainWindow(QMainWindow):
     def _on_worker_service_result(self, service_id: str, result: VerificationResult, prov_name: str) -> None:
         if self.active_worker and self.active_worker._is_cancelled:
             return
+        previous = self._session_results.get(service_id)
+        if getattr(result, 'alternative_failed', False) and previous and previous[0].status == ServiceStatus.OK:
+            card = self.service_cards.get(service_id)
+            if card:
+                card.result_label.setText(result.details)
+            return
+        self._session_results[service_id] = (result, prov_name)
         card = self.service_cards.get(service_id)
         if card:
             card.set_verification_result(result, provider_name=prov_name)
@@ -456,7 +487,8 @@ class MainWindow(QMainWindow):
             f"Применено маршрутов: {summary.get('fixed', 0)}\n"
             f"Требуют внимания: {summary.get('failed', 0)}"
         )
-        self.tray.notify("DNS Switcher AI+: Итоги проверки", msg)
+        if not (self.active_worker and getattr(self.active_worker, "silent", False)):
+            self.tray.notify("DNS Switcher AI+: Итоги проверки", msg)
 
     def _cancel_worker(self) -> None:
         if self.active_worker:

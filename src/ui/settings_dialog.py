@@ -92,7 +92,7 @@ class SettingsDialog(QDialog):
         from core.updater import VERSION
         layout = QVBoxLayout(tab)
         layout.addWidget(QLabel(f'Установлена версия {VERSION}'))
-        self.app_update_status = QLabel('Проверка стабильной версии в sasha59/dns-switcher-ai-plus.')
+        self.app_update_status = QLabel('Проверка стабильной версии в pryanus/dns-switcher-ai-plus.')
         self.app_update_status.setWordWrap(True)
         layout.addWidget(self.app_update_status)
         self.check_app_btn = QPushButton('Проверить обновления')

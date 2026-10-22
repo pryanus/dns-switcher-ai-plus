@@ -18,11 +18,13 @@ class VerificationWorker(QThread):
     error_occurred = Signal(str)
 
     def __init__(self, services, hosts_manager, provider_manager, storage,
-                 auto_fix=False, parent=None, forced=None):
+                 auto_fix=False, parent=None, forced=None, rotate=False, prefer_provider_order=False):
         super().__init__(parent)
         self.services, self.hosts_manager = services, hosts_manager
         self.provider_manager, self.storage = provider_manager, storage
         self.auto_fix, self.forced = auto_fix, forced
+        self.rotate = rotate
+        self.prefer_provider_order = prefer_provider_order
         self.cancellation = Cancellation()
         self._is_cancelled = False
 
@@ -107,6 +109,47 @@ class VerificationWorker(QThread):
         entries = self.hosts_manager.get_service_current_ips(service.domains)
         current_ips = entries.get(service.primary_domain, [])
         current_ip = current_ips[0] if current_ips else ''
+        if not self.rotate and not self.forced:
+            ips = current_ips
+            if not ips and not self.auto_fix:
+                resolved = parallel([service.primary_domain], self._resolve,
+                                    self.cancellation, timeout=1.5)[0]
+                ips = resolved or []
+            probes = parallel(ips[:2], lambda ip: self._probe(ip, service.primary_domain,
+                service.test_path, (302, 303, 307, 308)), self.cancellation, timeout=3)
+            good = next((probe for probe in probes if probe and probe.is_routable), None)
+            if good:
+                active = dict(self.storage.get_active_route(service.id) or {})
+                provider_name = active.get('provider_name') if active.get('ip') == good.ip else None
+                if not provider_name:
+                    for provider in self.provider_manager.list_providers():
+                        cached = getattr(provider, '_domain_ips', getattr(provider, '_ip_cache', {}))
+                        if good.ip in cached.get(service.primary_domain, []):
+                            provider_name = provider.name
+                            break
+                provider_name = provider_name or ('Из hosts' if current_ips else 'Системный DNS')
+                good.status = ServiceStatus.OK
+                good.applied = False
+                good.is_current = True
+                good.confirmable = True
+                good.details = 'Активный маршрут отвечает по HTTPS; адрес сохранён. ' + good.details
+                if current_ips:
+                    active.update(ip=good.ip, provider_name=provider_name, status='OK',
+                        latency_ms=good.latency_ms, network_ok=True, confirmable=True,
+                        checked_at=time.time(), details=good.details)
+                    self.storage.config.active_routes[service.id] = active
+                    self.storage.save_config()
+                self.service_result.emit(service.id, good, provider_name)
+                summary['ok'] += 1
+                return
+            if not self.auto_fix:
+                result = VerificationResult(current_ip, service.primary_domain, ServiceStatus.UNKNOWN,
+                    0, 'Автоматическая проверка не дала ответа. Текущие адреса не изменены.')
+                result.is_current = True
+                result.confirmable = bool(current_ip)
+                self.service_result.emit(service.id, result, 'Из hosts' if current_ip else 'Системный DNS')
+                summary['failed'] += 1
+                return
         checks = checks_for(service)
         primary = next((c for c in checks if c[0] == service.primary_domain),
                        (service.primary_domain, service.test_path, 'Приложение', ()))
@@ -141,7 +184,9 @@ class VerificationWorker(QThread):
                 details=probe.details if probe else 'Тайм-аут', routable=bool(probe and probe.is_routable)))
             if probe and probe.is_routable:
                 viable.append((candidate, probe))
-        # Сохраняем порядок пула провайдеров: повторные нажатия проходят его по кругу.
+        # Работоспособность проверяем первой; задержка сортирует подходящие кандидаты.
+        if not self.prefer_provider_order:
+            viable.sort(key=lambda item: (item[1].status != ServiceStatus.OK, item[1].latency_ms))
         selected = best = report = None
         failure_report = []
         for candidate, probe in viable:
@@ -177,13 +222,10 @@ class VerificationWorker(QThread):
             if failure_report:
                 details += '\n' + '\n'.join(r['label'] + ' (' + r['domain'] + '): ' +
                     ('HTTPS доступен' if r['ok'] else r['details']) for r in failure_report)
-            result = VerificationResult(current_ip, service.primary_domain, ServiceStatus.DEAD, 0, details)
+            result = VerificationResult(current_ip, service.primary_domain, ServiceStatus.UNKNOWN, 0, details)
             result.applied = False
-            result.confirmable = False
-            old_route = self.storage.get_active_route(service.id)
-            if old_route:
-                old_route.update(status='DEAD', confirmed=False, confirmable=False, details=details)
-                self.storage.save_config()
+            result.confirmable = bool(current_ip)
+            result.alternative_failed = self.rotate
             self.service_result.emit(service.id, result, '')
             summary['failed'] += 1
             return
@@ -221,7 +263,7 @@ class VerificationWorker(QThread):
         confirmed = bool(old.get('confirmed') and old.get('domain_ips') == mappings and
                          old.get('ip') == selected.ip)
         conflicts = self.hosts_manager.get_conflicts(mappings)
-        best.status = ServiceStatus.OK if confirmed and not conflicts else ServiceStatus.PARTIAL
+        best.status = ServiceStatus.OK
         best.applied = self.auto_fix
         best.is_current = not self.auto_fix
         best.confirmable = (self.auto_fix or bool(current_ip)) and not bool(conflicts)

@@ -91,7 +91,7 @@ class TestUIHeadless(unittest.TestCase):
         self.assertTrue(card.help_label.isHidden())
         result = VerificationResult('1.1.1.1', 'open.spotify.com', ServiceStatus.DEAD, 1, 'Probe failed')
         card.set_verification_result(result, 'GeoHide')
-        self.assertEqual(card.status_badge.text(), 'Маршрут не найден')
+        self.assertEqual(card.status_badge.text(), 'Не удалось проверить')
         self.assertEqual(card.status_badge.toolTip(), '')
         self.assertTrue(card.help_label.isHidden())
 
@@ -141,9 +141,10 @@ class TestUIHeadless(unittest.TestCase):
         self.assertTrue(StorageManager(str(self.data_dir)).get_active_route('chatgpt')['confirmed'])
         self.storage.config.rejected_routes['chatgpt'] = ['8.8.8.8']
         from unittest.mock import patch
-        with patch.object(self.window, '_on_check_single_service') as start:
+        with patch.object(self.window, '_start_batch_worker') as start:
             self.window._route_feedback('chatgpt', 'reset')
-            start.assert_called_once_with('chatgpt')
+            self.assertEqual(start.call_count, 1)
+            self.assertTrue(start.call_args.kwargs['rotate'])
         self.assertNotIn('chatgpt', StorageManager(str(self.data_dir)).config.rejected_routes)
 
 

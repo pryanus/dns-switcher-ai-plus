@@ -23,6 +23,13 @@ class Updates(unittest.TestCase):
         self.assertTrue(parse_release(self.info(), '1.5.0')['available'])
         self.assertFalse(parse_release(self.info(), '1.10.0')['available'])
 
+    def test_rebuilt_release_with_same_number_is_detected(self):
+        release = self.info()
+        digest = release['assets'][0]['digest'].split(':')[1]
+        self.assertFalse(parse_release(release, '1.6.0', digest)['available'])
+        self.assertTrue(parse_release(release, '1.6.0', '0' * 64)['available'])
+        self.assertFalse(parse_release(release, '1.7.0', '0' * 64)['available'])
+
     def test_untrusted_releases_are_rejected(self):
         for field, value in [('browser_download_url', 'https://example.com/evil.exe'),
                              ('digest', ''), ('size', 999999999)]:

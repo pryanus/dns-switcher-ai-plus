@@ -109,7 +109,8 @@ def main():
         catalog=catalog,
         hosts_manager=hosts_mgr,
         provider_manager=provider_mgr,
-        storage=storage
+        storage=storage,
+        auto_check=True
     )
 
     instance.connect_window(window)

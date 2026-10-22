@@ -1,6 +1,6 @@
 # DNS Switcher AI+
 
-- This directory is the canonical local source for `sasha59/dns-switcher-ai-plus`.
+- This directory is the canonical local source for `pryanus/dns-switcher-ai-plus`.
 - The user requested keeping local changes and GitHub synchronized: after requested changes, run focused checks, commit and push verified work. Preserve unrelated edits.
 - Rebuild the Windows executable for runtime/UI changes. Keep generated binaries in GitHub Releases, not Git history.
 - Never publish user settings, personal hosts, backups, caches, credentials or local paths.

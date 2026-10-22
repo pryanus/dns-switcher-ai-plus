@@ -191,14 +191,15 @@ class ServiceCard(QWidget):
         provider = self.route_info.get('provider_name', '')
         self.ip_badge.setText(f"{provider or 'Из hosts'} · {self.current_ip}" if self.current_ip else 'Системный DNS')
         status = self.route_info.get('status', 'UNKNOWN')
-        label, color = {'OK': ('Проверено', '#aaaab2'),
+        label, color = {'OK': ('Работает', '#7acb9c'),
                         'PARTIAL': ('DNS применён' if self._result_applied else 'Проверка завершена', '#aaaab2'),
-                        'DEAD': ('Маршрут не найден', '#aaaab2')}.get(status, ('', '#aaaab2'))
+                        'DEAD': ('Не удалось проверить', '#aaaab2'),
+                        'UNKNOWN': ('Не удалось проверить', '#aaaab2')}.get(status, ('', '#aaaab2'))
         if self.route_info.get('suggested'):
             label, color = 'Найден маршрут', '#79adff'
         self.feedback_row.setVisible(True)
         self.next_btn.setEnabled(self.service.routing_mode == 'geo')
-        self.confirm_btn.setEnabled(bool(self.current_ip) and self.route_info.get('confirmable', True))
+        self.confirm_btn.setEnabled(bool(self.current_ip) and self.service.routing_mode == 'geo')
 
         self.help_label.clear()
         self.help_label.hide()

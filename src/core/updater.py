@@ -17,7 +17,7 @@ from PySide6.QtCore import QThread, Signal
 from core.network import Cancellation, Cancelled
 
 VERSION = '1.0.0'
-REPOSITORY = 'sasha59/dns-switcher-ai-plus'
+REPOSITORY = 'pryanus/dns-switcher-ai-plus'
 ASSET_NAME = 'DNS_Switcher_AI_Plus.exe'
 API_URL = f'https://api.github.com/repos/{REPOSITORY}/releases/latest'
 MAX_SIZE = 128 * 1024 * 1024
@@ -41,13 +41,14 @@ def validate_download_url(url, initial=False):
         raise ValueError('Обновление не принадлежит репозиторию приложения')
 
 
-def parse_release(data, current=VERSION):
+def parse_release(data, current=VERSION, current_digest=None):
     if not isinstance(data, dict) or data.get('draft') or data.get('prerelease'):
         raise ValueError('Релиз не является стабильной версией')
     tag = data.get('tag_name', '')
     newer = version_tuple(tag) > version_tuple(current)
+    same_build_channel = version_tuple(tag) == version_tuple(current) and current_digest is not None
     result = dict(version=tag.lstrip('v'), available=newer)
-    if not newer:
+    if not newer and not same_build_channel:
         return result
     asset = next((a for a in data.get('assets', []) if a.get('name') == ASSET_NAME), None)
     if not asset:
@@ -59,6 +60,8 @@ def parse_release(data, current=VERSION):
         raise ValueError('Некорректный размер обновления')
     if not re.fullmatch(r'sha256:[0-9a-fA-F]{64}', digest):
         raise ValueError('У релиза нет контрольной суммы SHA-256')
+    if same_build_channel:
+        result['available'] = digest.split(':')[1].lower() != current_digest
     result.update(url=url, size=size, sha256=digest.split(':')[1].lower())
     return result
 
@@ -122,7 +125,7 @@ class AppUpdateWorker(QThread):
         try:
             with httpx.Client(timeout=httpx.Timeout(5, connect=4), follow_redirects=False,
                     headers={'User-Agent': 'DNS-Switcher-AI-Plus/' + VERSION,
-                             'Accept': 'application/vnd.github+json'}) as client:
+                             'Accept': 'application/vnd.github+json', 'Cache-Control': 'no-cache'}) as client:
                 if self.release:
                     path = download_release(self.release, client, self.token, self.progress.emit)
                     result = dict(self.release, path=path)
@@ -137,7 +140,8 @@ class AppUpdateWorker(QThread):
                             raw.extend(chunk)
                             if len(raw) > 1024 * 1024:
                                 raise ValueError('Слишком большой ответ GitHub')
-                    result = parse_release(json.loads(raw))
+                    current_digest = hashlib.sha256(Path(sys.executable).read_bytes()).hexdigest() if getattr(sys, 'frozen', False) else None
+                    result = parse_release(json.loads(raw), current_digest=current_digest)
                 self.token.check()
                 self.completed.emit(result)
         except Cancelled:
