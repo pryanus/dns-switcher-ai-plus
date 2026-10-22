@@ -5,6 +5,7 @@ and guarantee atomic, reversible operations.
 """
 
 import os
+import json
 import re
 import sys
 import shutil
@@ -259,6 +260,51 @@ class HostsManager:
 
     ROUTES_START = "# === DNS Switcher Routes ==="
     ROUTES_END = "# === End DNS Switcher Routes ==="
+    SUSPENDED_START = "# === DNS Switcher Suspended Entry ==="
+    SUSPENDED_END = "# === End DNS Switcher Suspended Entry ==="
+
+    def _restore_suspended(self, content):
+        pattern = re.compile(r'^' + re.escape(self.SUSPENDED_START) + r'\r?\n'
+            r'# Saved: ([^\r\n]+)\r?\n(.*?)^' + re.escape(self.SUSPENDED_END) + r'(?:\r?\n|$)',
+            re.MULTILINE | re.DOTALL)
+
+        def restore(match):
+            try:
+                saved = json.loads(match.group(1))
+            except (ValueError, TypeError):
+                saved = None
+            if (not isinstance(saved, list) or len(saved) != 2 or
+                    not all(isinstance(value, str) for value in saved) or
+                    len(saved[0].splitlines()) != 1 or match.group(2) != saved[1]):
+                raise ValueError('Изменена сохранённая строка DNS Switcher. Hosts не изменён; используйте резервную копию.')
+            return saved[0]
+
+        restored = pattern.sub(restore, content)
+        if self.SUSPENDED_START in restored or self.SUSPENDED_END in restored:
+            raise ValueError('Повреждены границы сохранённой строки DNS Switcher. Hosts не изменён.')
+        return restored
+
+    def _suspend_conflicts(self, original, active_domains):
+        # Один активный адрес на домен. Исходные строки и окончания строк
+        # хранятся в самом hosts и восстанавливаются при сбросе без внешней базы.
+        result = []
+        for line in original.splitlines(keepends=True):
+            source, separator, comment = line.partition('#')
+            fields = source.split()
+            if len(fields) < 2 or not any(d.lower() in active_domains for d in fields[1:]):
+                result.append(line)
+                continue
+            aliases = [d for d in fields[1:] if d.lower() not in active_domains]
+            remaining = ''
+            if aliases:
+                remaining = fields[0] + '    ' + ' '.join(aliases)
+                if separator:
+                    remaining += ' #' + comment.rstrip('\r\n')
+                remaining += '\r\n'
+            saved = json.dumps([line, remaining], ensure_ascii=True)
+            result.append(self.SUSPENDED_START + '\r\n# Saved: ' + saved + '\r\n' +
+                          remaining + self.SUSPENDED_END + '\r\n')
+        return ''.join(result)
 
     def _split_managed(self, content):
         """Отделяет только наши блоки; остальной текст сохраняется без изменений."""
@@ -288,7 +334,7 @@ class HostsManager:
         remaining = wrapper.sub('', remaining)
         if self.ROUTES_START in remaining or self.ROUTES_END in remaining:
             raise ValueError("Повреждён общий блок DNS Switcher. Hosts не изменён.")
-        return sections, remaining
+        return sections, self._restore_suspended(remaining)
 
     def _write_managed(self, sections, original, encoding):
         lines = [self.ROUTES_START, '']
@@ -301,20 +347,15 @@ class HostsManager:
             lines.append('')
         lines.append(self.ROUTES_END)
         prefix = "\r\n".join(lines) + "\r\n" if any(sections.values()) else ''
+        active_domains = {domain for mappings in sections.values() for domain in mappings}
+        original = self._suspend_conflicts(original, active_domains)
         self.write_file_safely(self.hosts_path, prefix + original, encoding)
 
     def get_conflicts(self, mappings):
-        content, _ = self.read_file_safely(self.hosts_path)
-        _, original = self._split_managed(content)
-        conflicts = {}
-        for line in original.splitlines():
-            fields = line.partition('#')[0].split()
-            if len(fields) >= 2:
-                for domain in fields[1:]:
-                    domain = domain.lower()
-                    if domain in mappings and fields[0] != mappings[domain]:
-                        conflicts.setdefault(domain, []).append(fields[0])
-        return conflicts
+        active = self.parse_all_entries()
+        return {domain: [ip for ip in active.get(domain, []) if ip != target]
+                for domain, target in mappings.items()
+                if any(ip != target for ip in active.get(domain, []))}
 
     @locked
     def update_multiple_services(self, updates):

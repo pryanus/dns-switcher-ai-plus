@@ -57,7 +57,7 @@ class Regressions(unittest.TestCase):
     def test_shared_line_comment_and_unrelated_alias_survive(self):
         original = self.hosts.read_bytes()
         self.hm.update_service_ip('Example', '1.1.1.1', ['example.com'])
-        self.assertTrue(self.hosts.read_bytes().endswith(original))
+        self.assertEqual(self.hm._split_managed(self.hm.read_file_safely(self.hosts)[0])[1].encode('utf-8'), original)
         content = self.hosts.read_text()
         self.assertIn('keep.example # My Note', content)
         self.assertNotIn('evil', content)
@@ -67,11 +67,47 @@ class Regressions(unittest.TestCase):
         self.hosts.write_bytes(original)
         self.hm.update_service_ip('Example', '1.1.1.1', ['example.com'])
         self.hm.update_service_ip('Example', '8.8.4.4', ['example.com'])
-        self.assertTrue(self.hosts.read_bytes().endswith(original))
+        self.assertEqual(self.hm._split_managed(self.hm.read_file_safely(self.hosts)[0])[1].encode('utf-8'), original)
         self.assertEqual(self.hosts.read_text().count(f"{'8.8.4.4':<16} example.com"), 1)
-        self.assertEqual(self.hm.get_conflicts({'example.com': '8.8.4.4'}), {'example.com': ['8.8.8.8']})
+        self.assertEqual(self.hm.get_conflicts({'example.com': '8.8.4.4'}), {})
         self.hm.remove_service_entries('Example', ['example.com'])
         self.assertEqual(self.hosts.read_bytes(), original)
+
+    def test_overrides_survive_restart_and_reset_services_independently(self):
+        original = b'8.8.8.8 Example.com other.example keep.example # Keep\r\n'
+        self.hosts.write_bytes(original)
+        self.hm.update_service_ip('Example', '1.1.1.1', ['example.com'])
+        self.hm.update_service_ip('Other', '9.9.9.9', ['other.example'])
+        self.assertEqual(self.hm.parse_all_entries()['keep.example'], ['8.8.8.8'])
+        restarted = HostsManager(str(self.hosts), str(self.root / 'restart-backups'))
+        restarted.remove_service_entries('Example', ['example.com'])
+        active = restarted.parse_all_entries()
+        self.assertEqual(active['example.com'], ['8.8.8.8'])
+        self.assertEqual(active['other.example'], ['9.9.9.9'])
+        restarted.remove_all_managed_entries()
+        self.assertEqual(self.hosts.read_bytes(), original)
+
+    def test_override_reset_restores_encodings_and_missing_final_newline(self):
+        for encoding in ('utf-8-sig', 'cp1251', 'latin-1'):
+            with self.subTest(encoding=encoding):
+                note = 'Заметка' if encoding == 'cp1251' else 'caf' + chr(233)
+                text = '# Keep\r\n8.8.8.8 example.com keep.example # ' + note
+                original = text.encode(encoding)
+                self.hosts.write_bytes(original)
+                self.hm.update_service_ip('Example', '1.1.1.1', ['example.com'])
+                self.assertEqual(self.hm.parse_all_entries()['example.com'], ['1.1.1.1'])
+                self.hm.remove_all_managed_entries()
+                self.assertEqual(self.hosts.read_bytes(), original)
+
+    def test_manually_edited_override_is_never_silently_discarded(self):
+        self.hm.update_service_ip('Example', '1.1.1.1', ['example.com'])
+        content, encoding = self.hm.read_file_safely(self.hosts)
+        self.hm.write_file_safely(self.hosts, content.replace(
+            '\r\n8.8.8.8    keep.example # My Note\r\n', '\r\n8.8.8.8    manually.edited.example # My Note\r\n'), encoding)
+        before = self.hosts.read_bytes()
+        with self.assertRaises(ValueError):
+            self.hm.remove_all_managed_entries()
+        self.assertEqual(self.hosts.read_bytes(), before)
 
     def test_reset_all_restores_original_bytes_including_foreign_routes(self):
         original = b'# GeoHide / custom\r\n8.8.8.8 example.com other.example # Keep\n# Tail'
@@ -137,7 +173,7 @@ class Regressions(unittest.TestCase):
         self.hm.update_multiple_services([dict(service_name='Example', target_ip='8.8.4.4',
             domains=['example.com', 'api.example.com'], replace=True)])
         self.assertNotIn('old.example', self.hm.parse_all_entries())
-        self.assertTrue(self.hosts.read_bytes().endswith(original))
+        self.assertEqual(self.hm._split_managed(self.hm.read_file_safely(self.hosts)[0])[1].encode('utf-8'), original)
 
     def test_cloudflare_challenge_is_not_a_working_route(self):
         result = VerificationResult('1.1.1.1', 'example.com', ServiceStatus.PARTIAL, 1,
@@ -186,7 +222,7 @@ class Regressions(unittest.TestCase):
         self.storage.config.active_routes['example'] = {'ip': '9.9.9.9'}
         self.storage.config.favorites.append('twitch')
         self.assertTrue(_remove_retired_twitch(self.hm, self.storage))
-        self.assertTrue(self.hosts.read_bytes().endswith(original))
+        self.assertEqual(self.hm._split_managed(self.hm.read_file_safely(self.hosts)[0])[1].encode('utf-8'), original)
         self.assertNotIn('DNS Switcher Managed: Twitch', self.hosts.read_text())
         self.assertEqual(self.hm.parse_all_entries()['example.com'], ['9.9.9.9'])
         self.assertNotIn('twitch', self.storage.config.active_routes)
@@ -221,7 +257,7 @@ class Regressions(unittest.TestCase):
         self.hm.update_service_ip('Example', '1.1.1.1', ['example.com', 'api.example.com'])
         self.hm.update_service_ip('Example', '8.8.4.4', ['example.com'])
         self.assertEqual(self.hm.parse_all_entries()['api.example.com'], ['1.1.1.1'])
-        self.assertEqual(self.hm.parse_all_entries()['example.com'], ['8.8.4.4', '8.8.8.8'])
+        self.assertEqual(self.hm.parse_all_entries()['example.com'], ['8.8.4.4'])
 
     def test_domain_specific_ips_and_unique_backups(self):
         self.hm.update_multiple_services([dict(service_name='Example', target_ip='1.1.1.1',
@@ -295,7 +331,11 @@ class Regressions(unittest.TestCase):
                                       'Cloudflare challenge: JavaScript required', 'HTTP', 403)
         for service in Catalog().list_all():
             with self.subTest(service=service.id):
-                self.hosts.write_text('127.0.0.1 localhost\n')
+                original = ('127.0.0.1 localhost\r\n' +
+                    f'1.1.1.1 {service.primary_domain} keep.example # Keep\n' +
+                    f'8.8.8.8 {service.primary_domain}\r\n' +
+                    f'2606:4700:4700::1111 {service.primary_domain}').encode('utf-8')
+                self.hosts.write_bytes(original)
                 self.hm.update_service_ip(service.name, '1.1.1.1', service.domains)
                 previous = '1.1.1.1'
                 self.storage.config.rejected_routes[service.id] = []
@@ -310,8 +350,11 @@ class Regressions(unittest.TestCase):
                     self.assertNotEqual(route['ip'], previous)
                     self.assertEqual(route['status'], 'PARTIAL')
                     self.assertFalse(route['confirmed'])
-                    self.assertEqual(self.hm.parse_all_entries()[service.primary_domain][0], route['ip'])
+                    self.assertEqual(self.hm.parse_all_entries()[service.primary_domain], [route['ip']])
+                    self.assertEqual(self.hm.parse_all_entries()['keep.example'], ['1.1.1.1'])
                     previous = route['ip']
+                self.hm.remove_service_entries(service.name, service.domains)
+                self.assertEqual(self.hosts.read_bytes(), original)
 
     def test_api_failure_rejects_a_working_homepage(self):
         self.hosts.write_text('127.0.0.1 localhost\n')

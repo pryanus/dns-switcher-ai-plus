@@ -171,7 +171,7 @@ class TestUIHeadless(unittest.TestCase):
         self.window._route_feedback('spotify', 'restore_dns')
         self.assertIsNone(self.storage.get_active_route('spotify'))
         self.assertIsNotNone(self.storage.get_active_route('chatgpt'))
-        self.assertTrue(self.hosts_file.read_bytes().endswith(original))
+        self.assertEqual(self.hosts_mgr._split_managed(self.hosts_mgr.read_file_safely(self.hosts_file)[0])[1].encode('utf-8'), original)
         dialog = SettingsDialog(self.storage, self.hosts_mgr, self.provider_mgr, self.window)
         with patch('ui.settings_dialog.QMessageBox.information'):
             dialog._reset_all_dns()
