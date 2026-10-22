@@ -71,7 +71,7 @@ class ServiceCard(QWidget):
         self.action_btn.clicked.connect(lambda: self.check_requested.emit(service.id))
         bottom.addWidget(self.action_btn)
         self.expand_btn = QToolButton()
-        self.expand_btn.setText('Детали')
+        self.expand_btn.setText('Подробнее')
         self.expand_btn.clicked.connect(self.toggle_expanded)
         bottom.addWidget(self.expand_btn)
         self.main_layout.addLayout(bottom)
@@ -132,9 +132,7 @@ class ServiceCard(QWidget):
             button.setCursor(Qt.PointingHandCursor)
         self._update_display()
         if service.routing_mode != 'geo':
-            self.action_btn.setText('Подробнее')
-            self.action_btn.clicked.disconnect()
-            self.action_btn.clicked.connect(self.toggle_expanded)
+            self.action_btn.setToolTip(service.description)
             self.next_btn.setEnabled(False)
 
     def _on_fav_clicked(self):
@@ -153,7 +151,7 @@ class ServiceCard(QWidget):
     def toggle_expanded(self):
         self.is_expanded = not self.is_expanded
         self.detail_widget.setVisible(self.is_expanded)
-        self.expand_btn.setText('Свернуть' if self.is_expanded else 'Детали')
+        self.expand_btn.setText('Свернуть' if self.is_expanded else 'Подробнее')
 
     def set_current_ip(self, ip, route_info=None):
         self.current_ip = ip

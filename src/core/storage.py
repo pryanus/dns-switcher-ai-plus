@@ -28,7 +28,7 @@ class AppConfig:
         custom_services: Optional[List[Dict]] = None,
         custom_providers: Optional[List[Dict]] = None,
         active_routes: Optional[Dict[str, Dict]] = None,
-        catalog_revision: int = 4,
+        catalog_revision: int = 5,
         hidden_services=None,
         rejected_routes=None
     ):
@@ -133,6 +133,13 @@ class StorageManager:
         if self.config.catalog_revision < 4:
             self.config.catalog_revision = 4
             self.config.minimize_to_tray = True
+            self.save_config()
+
+        if self.config.catalog_revision < 5:
+            if 'claude' not in self.config.favorites:
+                self.config.favorites.append('claude')
+            self.config.hidden_services = [sid for sid in self.config.hidden_services if sid != 'claude']
+            self.config.catalog_revision = 5
             self.save_config()
 
     def load_config(self) -> AppConfig:

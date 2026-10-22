@@ -81,6 +81,30 @@ class TestUIHeadless(unittest.TestCase):
         self.assertTrue(card.is_expanded)
         self.assertFalse(card.detail_widget.isHidden())
 
+    def test_batch_button_follows_the_selected_tab(self):
+        from unittest.mock import patch
+        with patch.object(self.window, '_start_batch_worker') as start:
+            self.window.tab_bar.setCurrentIndex(1)
+            self.assertEqual(self.window.fix_fav_btn.text(), 'Подобрать всем')
+            self.window.fix_fav_btn.click()
+            self.assertEqual({s.id for s in start.call_args.args[0]}, {s.id for s in self.catalog.list_all()})
+            self.window.tab_bar.setCurrentIndex(0)
+            self.assertEqual(self.window.fix_fav_btn.text(), 'Подобрать избранному')
+            self.window.fix_fav_btn.click()
+            self.assertEqual({s.id for s in start.call_args.args[0]}, {s.id for s in self.catalog.list_favorites()})
+
+    def test_card_pick_targets_only_one_service_and_more_expands(self):
+        from unittest.mock import patch
+        card = self.window.service_cards['spotify']
+        with patch.object(self.window, '_start_batch_worker') as start:
+            card.action_btn.click()
+            self.assertEqual([s.id for s in start.call_args.args[0]], ['spotify'])
+            self.assertTrue(start.call_args.kwargs['auto_fix'])
+        self.assertEqual(card.action_btn.text(), 'Подобрать')
+        self.assertEqual(card.expand_btn.text(), 'Подробнее')
+        card.expand_btn.click()
+        self.assertTrue(card.is_expanded)
+
     def test_old_route_does_not_claim_access_and_has_no_diagnostic_tooltip(self):
         from core.verifier import ServiceStatus, VerificationResult
         card = self.window.service_cards['spotify']

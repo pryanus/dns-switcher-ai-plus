@@ -77,13 +77,13 @@ class Regressions(unittest.TestCase):
 
     def test_catalog_focus_and_stable_priority(self):
         services = Catalog().list_all()
-        self.assertEqual(len(services), 24)
+        self.assertEqual(len(services), 28)
         self.assertEqual([s.id for s in services[:4]], ['chatgpt', 'gemini', 'claude', 'elevenlabs'])
         self.assertEqual({s.id for s in Catalog().list_favorites()}, {'spotify', 'chatgpt', 'gemini', 'claude'})
-        self.assertTrue({'steam', 'ea', 'battlenet', 'epicgames', 'xbox', 'playstation', 'twitter', 'youtube', 'discord', 'hume', 'opencode', 'cerebras'}.isdisjoint({s.id for s in services}))
+        self.assertTrue({'steam', 'ea', 'battlenet', 'epicgames', 'xbox', 'playstation', 'twitter', 'youtube', 'discord', 'opencode', 'windsurf', 'disneyplus', 'paramountplus'}.isdisjoint({s.id for s in services}))
         self.assertEqual(len({s.id for s in services}), len(services))
-        self.assertEqual(sum(s.category == 'Нейросети' for s in services), 11)
-        self.assertEqual(sum(s.category == 'Музыка, видео и общение' for s in services), 13)
+        self.assertEqual(sum(s.category == 'Нейросети' for s in services), 17)
+        self.assertEqual(sum(s.category == 'Музыка, видео и общение' for s in services), 11)
 
     def test_existing_favorites_migrate_once_without_changing_routes(self):
         import json
@@ -244,7 +244,18 @@ class Regressions(unittest.TestCase):
             favorites=['spotify'], minimize_to_tray=False)))
         migrated = StorageManager(str(self.storage.data_dir))
         self.assertTrue(migrated.config.minimize_to_tray)
-        self.assertEqual(migrated.config.favorites, ['spotify'])
+        self.assertEqual(migrated.config.favorites, ['spotify', 'claude'])
+
+    def test_claude_is_restored_once_for_existing_users(self):
+        import json
+        self.storage.config_path.write_text(json.dumps(dict(catalog_revision=4,
+            favorites=['spotify'], hidden_services=['claude', 'netflix'])))
+        migrated = StorageManager(str(self.storage.data_dir))
+        self.assertEqual(migrated.config.favorites, ['spotify', 'claude'])
+        self.assertEqual(migrated.config.hidden_services, ['netflix'])
+        migrated.config.favorites.remove('claude')
+        migrated.save_config()
+        self.assertNotIn('claude', StorageManager(str(self.storage.data_dir)).config.favorites)
 
     def test_bad_auxiliary_domain_is_not_repointed(self):
         worker = VerificationWorker([self.service], self.hm, self.providers, self.storage, True,

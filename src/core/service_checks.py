@@ -2,6 +2,12 @@
 
 # Коды относятся только к известным путям без авторизации, а не ко всему сервису.
 PROFILES = {
+    'githubcopilot': [('api.githubcopilot.com', '/', 'Copilot API', (401, 404, 405))],
+    'groq': [('console.groq.com', '/', 'Консоль Groq', (301, 302, 303, 307, 308)),
+             ('api.groq.com', '/', 'API Groq', (401, 404))],
+    'cerebras': [('cerebras.ai', '/', 'Cerebras', (301, 302, 303, 307, 308)),
+                 ('api.cerebras.ai', '/', 'API Cerebras', (401, 404))],
+    'sora': [('sora.com', '/', 'Sora', (301, 302, 303, 307, 308))],
     'chatgpt': [
         ('chatgpt.com', '/api/auth/session', 'Сессия ChatGPT', (401,)),
         ('auth.openai.com', '/', 'Вход', (302, 303, 307, 308)),

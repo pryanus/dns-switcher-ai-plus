@@ -132,6 +132,7 @@ class MainWindow(QMainWindow):
         # 3. View Tabs (Favorites / Catalog)
         # -------------------------------------------------------------
         self.tab_bar = QTabWidget(self)
+        self.tab_bar.setObjectName("serviceTabs")
         self.tab_bar.currentChanged.connect(self._on_tab_changed)
 
         # Tab 1: Favorites
@@ -154,7 +155,7 @@ class MainWindow(QMainWindow):
         self.all_layout.setSpacing(10)
         self.all_layout.addStretch()
         self.all_scroll.setWidget(self.all_container)
-        self.tab_bar.addTab(self.all_scroll, " Каталог")
+        self.tab_bar.addTab(self.all_scroll, "Каталог")
 
         filter_row = QHBoxLayout()
         self.category_combo = QComboBox()
@@ -208,7 +209,7 @@ class MainWindow(QMainWindow):
         self.fix_fav_btn = QPushButton("Подобрать избранному", self)
         self.fix_fav_btn.setProperty("class", "primaryBtn")
         self.fix_fav_btn.setCursor(Qt.PointingHandCursor)
-        self.fix_fav_btn.clicked.connect(self.fix_favorites)
+        self.fix_fav_btn.clicked.connect(self._fix_current_tab)
         footer_layout.addWidget(self.fix_fav_btn)
 
         self.fix_all_btn = QPushButton("Проверить", self)
@@ -307,7 +308,15 @@ class MainWindow(QMainWindow):
             card.setVisible(card.service.matches_query(text) and (category is None or card.service.category == category))
 
     def _on_tab_changed(self, idx: int) -> None:
+        if hasattr(self, 'fix_fav_btn'):
+            self.fix_fav_btn.setText('Подобрать избранному' if idx == 0 else 'Подобрать всем')
         self._populate_services()
+
+    def _fix_current_tab(self):
+        if self.tab_bar.currentIndex() == 0:
+            self.fix_favorites()
+        else:
+            self.fix_all()
 
     def _reposition_cards(self) -> None:
         """Positions cards into favorites or all services containers."""

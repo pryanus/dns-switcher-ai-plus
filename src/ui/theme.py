@@ -31,6 +31,9 @@ QComboBox QAbstractItemView { background: #232326; color: #f0f0f2; border: 1px s
 QMessageBox { background: #18181b; }
 QTabBar::tab:selected { background: #35353b; }
 QToolButton:hover { background: #35353b; }
+QTabWidget#serviceTabs QTabBar::tab { font-size: 17px; font-weight: 500; min-width: 114px; padding: 12px 22px; border: 1px solid #45454d; background: #242428; color: #c4c4cc; }
+QTabWidget#serviceTabs QTabBar::tab:hover { background: #2c3038; }
+QTabWidget#serviceTabs QTabBar::tab:selected { background: #303d50; border-color: #6785ac; color: #f3f6ff; }
 QListWidget { background: #232326; border: 1px solid #35353b; border-radius: 8px; }
 QScrollBar:vertical { background: transparent; width: 9px; margin: 3px; }
 QScrollBar::handle:vertical { background: #55555d; border-radius: 3px; min-height: 30px; }
