@@ -222,13 +222,18 @@ class ServiceCard(QWidget):
             row = QWidget()
             layout = QHBoxLayout(row)
             layout.setContentsMargins(0, 0, 0, 0)
-            state = 'Cloudflare: доступ не подтверждён' if candidate.get('browser_required') else candidate['status']
-            label = QLabel(f"{candidate['provider_name']}  /  {candidate['ip']}  /  {state}")
+            state = 'Cloudflare: доступ не подтверждён' if candidate.get('browser_required') else candidate.get('category', candidate['status'])
+            label = QLabel(f"{candidate['provider_name']} / {candidate.get('domain', self.service.primary_domain)} / {candidate['ip']} / {state} / {candidate.get('details', '')}")
+            cache = candidate.get('cache_info', [])
+            if cache:
+                label.setText(label.text() + ' / ' + '; '.join(
+                    x['provider'] + ': ' + ('кэш устарел или дата неизвестна' if x['stale'] else 'база ' + str(x['last_updated']))
+                    for x in cache))
             label.setTextFormat(Qt.PlainText)
             label.setWordWrap(True)
             label.setStyleSheet('font-size: 14px;')
             layout.addWidget(label, 1)
-            if candidate['status'] == 'OK' or candidate.get('routable'):
+            if (candidate['status'] == 'OK' or candidate.get('routable')) and candidate.get('domain', self.service.primary_domain) == self.service.primary_domain:
                 button = QPushButton('Выбрать')
                 button.clicked.connect(lambda checked=False, c=candidate:
                     self.apply_ip_requested.emit(self.service.id, c['ip'], c['provider_name']))

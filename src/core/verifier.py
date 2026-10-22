@@ -44,6 +44,18 @@ class VerificationResult:
         self.http_code = http_code
         self.timestamp = time.time()
 
+    @property
+    def category(self):
+        if hasattr(self, 'final_category'): return self.final_category
+        if self.is_browser_challenge: return 'CLOUDFLARE_CHALLENGE'
+        if 'Geo-block' in self.details: return 'GEO_BLOCK'
+        if self.stage_reached == 'TCP': return 'TCP_ERROR'
+        if self.stage_reached == 'TLS': return 'TLS_ERROR'
+        if self.status == ServiceStatus.OK: return 'CONFIRMED_ENDPOINT'
+        if self.http_code is not None: return 'HTTP_RESPONSE'
+        if self.stage_reached == 'HTTP': return 'HTTP_ERROR'
+        return 'SKIPPED'
+
     def to_dict(self) -> Dict:
         return {
             "ip": self.ip,
@@ -54,6 +66,7 @@ class VerificationResult:
             "stage_reached": self.stage_reached,
             "http_code": self.http_code,
             "timestamp": self.timestamp,
+            "category": self.category,
         }
 
     @property
@@ -62,6 +75,8 @@ class VerificationResult:
 
     @property
     def is_browser_challenge(self) -> bool:
+        if getattr(self, 'final_category', '') == 'CLOUDFLARE_CHALLENGE':
+            return True
         return (self.status == ServiceStatus.PARTIAL and self.stage_reached == 'HTTP'
                 and self.http_code in (200, 403, 503)
                 and self.details.startswith('Cloudflare challenge:'))
@@ -84,7 +99,7 @@ class ServiceVerifier:
 
     @classmethod
     def verify_candidate(cls, ip, domain, port=443, path="/", timeout=3.0,
-                         cancellation=None, accepted_codes=(), redirects=2):
+                         cancellation=None, accepted_codes=(), redirects=2, redirect_resolver=None):
         clean_domain = domain_name(domain)
         address = ipaddress.ip_address(ip)
         if not path.startswith("/") or any(c in path for c in "\r\n "):
@@ -194,13 +209,31 @@ class ServiceVerifier:
                 target = urlparse(urljoin('https://' + clean_domain + path, location))
                 if (redirects and location and target.scheme == 'https' and target.hostname
                         and not target.username and not target.password and target.port in (None, 443)):
-                    # Проверяем реальную цель редиректа через тот же IP и новое TLS/SNI.
-                    redirected = cls.verify_candidate(ip, target.hostname,
-                        path=(target.path or '/') + ('?' + target.query if target.query else ''),
-                        timeout=remaining(), cancellation=cancellation, redirects=redirects - 1)
-                    redirected.domain = clean_domain
-                    redirected.latency_ms = int((time.monotonic() - started) * 1000)
-                    return redirected
+                    target_ips = [ip] if target.hostname == clean_domain else (
+                        redirect_resolver(target.hostname) if redirect_resolver else [])
+                    if not target_ips:
+                        return result(ServiceStatus.UNKNOWN, 'Редирект: нет проверенного IP для ' + target.hostname, code)
+                    from core.network import parallel
+                    def follow(target_ip):
+                        return cls.verify_candidate(target_ip, target.hostname,
+                            path=(target.path or '/') + ('?' + target.query if target.query else ''),
+                            timeout=timeout, cancellation=cancellation, redirects=redirects - 1,
+                            redirect_resolver=redirect_resolver)
+                    targets = list(dict.fromkeys(target_ips))
+                    followed = parallel(targets, follow, cancellation, timeout=None, limit=4)
+                    attempts = [r.to_dict() if r else dict(ip=target_ip, domain=target.hostname,
+                        status='UNKNOWN', category='SKIPPED', details='Ошибка задачи редиректа')
+                        for target_ip, r in zip(targets, followed)]
+                    last = min((r for r in followed if r), key=lambda r: (
+                        not r.is_routable, not r.is_browser_challenge,
+                        r.http_code is None, r.latency_ms), default=None)
+                    if last is None:
+                        return result(ServiceStatus.UNKNOWN, 'Редирект: бюджет цепочки исчерпан', code)
+                    outcome = result(last.status, 'Редирект → ' + target.hostname + ': ' + last.details, code)
+                    outcome.redirect_attempts = attempts
+                    outcome.redirect_checks = [last.to_dict()] + getattr(last, 'redirect_checks', [])
+                    outcome.final_category = last.category
+                    return outcome
                 return result(ServiceStatus.PARTIAL, f"HTTP {code}: переход не подтверждает доступ к функциям", code)
             if code and code >= 500:
                 return result(ServiceStatus.DEAD, f"HTTP {code}: ошибка сервера", code)

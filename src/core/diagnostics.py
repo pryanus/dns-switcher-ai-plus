@@ -1,45 +1,51 @@
-"""Прямая диагностика без записи системного hosts и изменения настроек."""
+"""Тот же подбор Canva/Claude на временном hosts, без изменения настроек пользователя."""
 import json
+import os
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
+from PySide6.QtCore import QCoreApplication, Qt
 from providers.manager import ProviderManager
+from providers.custom import CustomProvider
 from core.catalog import Catalog
-from core.verifier import ServiceVerifier
+from core.monitor import VerificationWorker
+from core.hosts_manager import HostsManager
+from core.storage import StorageManager
 
-def run(output, timeout=8):
-    report = {'timestamp': datetime.now(timezone.utc).isoformat(), 'sources': [], 'checks': []}
-    with TemporaryDirectory() as cache:
-        manager = ProviderManager(cache_dir=cache)
-        catalog = Catalog()
-        for provider in manager.list_providers():
-            if provider.id == 'google-public-dns':
-                continue
-            # Свежие GeoHide/MALW загружаются отдельно от пользовательского кэша.
-            refreshed = provider.update_database() if provider.id.startswith('geohide-') or provider.id == 'malw-dns' else None
-            report['sources'].append({'provider': provider.name, 'refreshed': refreshed, 'error': provider.last_error})
-            pairs = [(sid, domain) for sid in ('canva', 'claude') for domain in catalog.get_service(sid).domains]
-            def discover(pair):
-                sid, domain = pair
-                candidates = provider.fetch_candidates(domain)
-                return sid, domain, list(dict.fromkeys(c.ip for c in candidates))
-            with ThreadPoolExecutor(max_workers=4) as pool:
-                discovered = list(pool.map(discover, pairs))
-            tasks = [(sid, domain, ip) for sid, domain, ips in discovered for ip in ips]
-            for sid, domain, ips in discovered:
-                if not ips:
-                    report['checks'].append({'service': sid, 'provider': provider.name, 'domain': domain, 'ips': [], 'reason': 'Источник не вернул адрес этого домена'})
-            def probe(task):
-                sid, domain, ip = task
-                result = ServiceVerifier.verify_candidate(ip, domain, timeout=timeout)
-                stage = result.stage_reached
-                return {'service': sid, 'provider': provider.name, 'domain': domain, 'ip': ip,
-                        'tcp': 'passed' if stage in ('TLS', 'HTTP') else 'failed',
-                        'tls': 'passed' if stage == 'HTTP' else 'failed' if stage == 'TLS' else 'not_attempted',
-                        'http': result.http_code, 'status': result.status.value, 'reason': result.details}
-            with ThreadPoolExecutor(max_workers=12) as pool:
-                report['checks'].extend(pool.map(probe, tasks))
+
+def run(output, data_dir=None):
+    app = QCoreApplication.instance() or QCoreApplication([])
+    config_path = Path(data_dir or Path(os.environ.get('APPDATA', Path.home())) / 'DNS-Switcher') / 'config.json'
+    config = json.loads(config_path.read_text(encoding='utf-8')) if config_path.exists() else {}
+    report = dict(timestamp=datetime.now(timezone.utc).isoformat(), sources=[], services=[], errors=[])
+    with TemporaryDirectory() as folder:
+        root = Path(folder)
+        manager = ProviderManager(str(root / 'cache'))
+        for pid, enabled in config.get('providers_enabled', {}).items():
+            manager.set_provider_enabled(pid, enabled)
+        for definition in config.get('custom_providers', []):
+            try:
+                manager.add_custom_provider(CustomProvider.from_dict(definition, str(root / 'cache')))
+            except (ValueError, KeyError) as error:
+                report['errors'].append(str(error))
+        updates = manager.update_all_databases()
+        report['sources'] = [dict(provider=p.name, enabled=p.enabled, updated=updates.get(p.id),
+                                  last_updated=p.last_updated, error=p.last_error)
+                             for p in manager.list_providers()]
+        for sid in ('canva', 'claude'):
+            service = Catalog().get_service(sid)
+            storage = StorageManager(str(root / sid))
+            hosts = root / (sid + '-hosts')
+            hosts.write_text('127.0.0.1 localhost\n', encoding='utf-8')
+            worker = VerificationWorker([service], HostsManager(str(hosts), str(root / 'backups')),
+                                        manager, storage, auto_fix=True)
+            results = []
+            worker.service_result.connect(lambda name, result, provider: results.append(result), Qt.DirectConnection)
+            worker.error_occurred.connect(report['errors'].append, Qt.DirectConnection)
+            worker.run()
+            report['services'].append(dict(service=sid, result=results[0].to_dict() if results else None,
+                candidates=worker._detail_rows.get(sid, {}), discovery=dict(manager.discovery),
+                checked=getattr(results[0], 'checked_count', 0) if results else 0,
+                skipped=getattr(results[0], 'skipped_count', 0) if results else 0))
             Path(output).write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding='utf-8')
-            print(provider.name + ': done', flush=True)
     return report

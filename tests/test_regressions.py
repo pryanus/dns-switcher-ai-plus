@@ -193,7 +193,7 @@ class Regressions(unittest.TestCase):
         self.assertTrue(result['ok'])
         self.assertEqual(result['ip'], '9.9.9.9')
 
-    def test_canonical_redirect_is_checked_on_same_ip_and_geoblock_still_rejected(self):
+    def test_cross_host_redirect_uses_resolved_target_and_rejects_geoblock(self):
         for body, expected in [(b'Welcome', ServiceStatus.OK),
                                (b'not available in your country', ServiceStatus.DEAD)]:
             with patch('socket.socket'), patch('ssl.create_default_context') as context:
@@ -201,7 +201,7 @@ class Regressions(unittest.TestCase):
                 context.return_value.wrap_socket.side_effect = [first, second]
                 first.recv.side_effect = [b'HTTP/1.1 301 Moved\r\nLocation: https://www.example.com/app\r\nContent-Length: 0\r\n\r\n']
                 second.recv.side_effect = [b'HTTP/1.1 200 OK\r\n\r\n' + body, b'']
-                result = ServiceVerifier.verify_candidate('1.1.1.1', 'example.com')
+                result = ServiceVerifier.verify_candidate('1.1.1.1', 'example.com', redirect_resolver=lambda host: ['8.8.4.4'])
                 self.assertEqual(result.status, expected)
                 self.assertEqual(context.return_value.wrap_socket.call_args.kwargs['server_hostname'], 'www.example.com')
 
@@ -319,10 +319,10 @@ class Regressions(unittest.TestCase):
              patch.object(ServiceVerifier, 'verify_candidate', side_effect=probe):
             worker.run()
         route = self.storage.get_active_route('example')
-        self.assertEqual(route['ip'], '8.8.4.4')
-        self.assertEqual(set(route['domain_ips'].values()), {'8.8.4.4'})
+        self.assertIn(route['ip'], {'1.1.1.1', '8.8.4.4'})
+        self.assertEqual(route['domain_ips']['api.example.com'], '8.8.4.4')
 
-    def test_primary_and_api_from_incompatible_providers_are_not_combined(self):
+    def test_primary_and_api_from_different_sources_are_combined_when_both_pass(self):
         pool = [CandidateIP('1.1.1.1', 'first', 'First'), CandidateIP('8.8.4.4', 'second', 'Second')]
         before = self.hosts.read_bytes()
         worker = VerificationWorker([self.service], self.hm, self.providers, self.storage, True)
@@ -332,8 +332,8 @@ class Regressions(unittest.TestCase):
         with patch.object(self.providers, 'get_candidates', return_value=pool), \
              patch.object(ServiceVerifier, 'verify_candidate', side_effect=probe):
             worker.run()
-        self.assertIsNone(self.storage.get_active_route('example'))
-        self.assertEqual(self.hosts.read_bytes(), before)
+        self.assertEqual(self.storage.get_active_route('example')['domain_ips'],
+                         {'example.com': '1.1.1.1', 'api.example.com': '8.8.4.4'})
 
     def test_verified_response_has_priority_over_cloudflare_challenge(self):
         self.hm.update_service_ip('Example', '9.9.9.9', self.service.domains)
@@ -727,6 +727,42 @@ class Regressions(unittest.TestCase):
         self.assertFalse(any(call.args[0] == '1.1.1.1' and call.args[1] == self.service.primary_domain
                              for call in probe.call_args_list))
         self.assertEqual(set(route['domain_ips']), set(self.service.domains))
+
+    def test_pool_checks_all_waves_without_global_deadline_or_provider_cascade(self):
+        worker = VerificationWorker([self.service], self.hm, self.providers, self.storage, True)
+        pool = [CandidateIP(f'8.8.4.{i}', 'same-provider', 'Same') for i in range(1, 22)]
+        def verify(ip, domain, **kwargs):
+            return VerificationResult(ip, domain, ServiceStatus.OK if ip.endswith('.21') else ServiceStatus.DEAD,
+                                      1, 'TCP timed out', 'TCP')
+        with patch.object(ServiceVerifier, 'verify_candidate', side_effect=verify):
+            results = worker._test_pool(pool, 'example.com', '/', (), 'example')
+        self.assertEqual(len([r for r in results if r]), 21)
+        self.assertTrue(results[-1].is_routable)
+        self.assertEqual(len(worker._detail_rows['example']['example.com']), 21)
+
+    def test_cross_host_redirect_without_resolver_is_unknown(self):
+        with patch('socket.socket') as socket_factory, patch('ssl.create_default_context') as context:
+            response = context.return_value.wrap_socket.return_value
+            response.recv.return_value = b'HTTP/1.1 302 Found\r\nLocation: https://other.example/\r\n\r\n'
+            result = ServiceVerifier.verify_candidate('1.1.1.1', 'example.com')
+            self.assertEqual(result.status, ServiceStatus.UNKNOWN)
+            self.assertEqual(socket_factory.call_count, 1)
+
+    def test_redirect_checks_alternative_ips_independently(self):
+        original = ServiceVerifier.verify_candidate
+        def verify(ip, domain, **kwargs):
+            if domain == 'other.example':
+                return VerificationResult(ip, domain, ServiceStatus.OK if ip == '8.8.4.4' else ServiceStatus.DEAD,
+                                          1, 'answer', 'HTTP', 200 if ip == '8.8.4.4' else 503)
+            return original(ip, domain, **kwargs)
+        with patch('socket.socket'), patch('ssl.create_default_context') as context, \
+             patch.object(ServiceVerifier, 'verify_candidate', side_effect=verify):
+            context.return_value.wrap_socket.return_value.recv.return_value = b'HTTP/1.1 302 Found\r\nLocation: https://other.example/\r\n\r\n'
+            result = ServiceVerifier.verify_candidate('1.1.1.1', 'example.com',
+                redirect_resolver=lambda host: ['8.8.8.8', '8.8.4.4'])
+        self.assertTrue(result.is_routable)
+        self.assertEqual(result.redirect_checks[0]['ip'], '8.8.4.4')
+        self.assertEqual(len(result.redirect_attempts), 2)
 
 
 

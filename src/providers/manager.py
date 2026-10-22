@@ -22,6 +22,7 @@ class ProviderManager:
         self.operation_lock = RLock()
         self.cache_dir = cache_dir
         self._recent = {}
+        self.discovery = {}
         self.providers: Dict[str, BaseProvider] = {}
         self._init_default_providers()
 
@@ -85,11 +86,22 @@ class ProviderManager:
             self._recent[key] = (time.monotonic(), value)
             return value
 
-        batches = parallel(sorted_providers, fetch, cancellation, timeout=4.0)
+        batches = parallel(sorted_providers, fetch, cancellation, timeout=12.0)
         # Обычный DNS нужен для сравнения. Его нативные адреса не являются GEO-прокси,
         # даже если другой резолвер вернул тот же IP и главная страница отвечает.
         origin_ips = {c.ip for p, batch in zip(sorted_providers, batches)
                       if p.id == 'google-public-dns' for c in (batch or [])}
+        from datetime import datetime
+        def age(provider):
+            try: return max(0, (datetime.now()-datetime.fromisoformat(provider.last_updated)).total_seconds())
+            except (TypeError, ValueError): return None
+        self.discovery[domain] = [dict(provider=p.name, ips=[c.ip for c in (batch or [])],
+            cache_age_seconds=age(p), stale=age(p) is None or age(p) > 86400,
+            state='SKIPPED' if batch is None else 'FOUND' if batch else 'SOURCE_ERROR' if p.last_error else 'UNSUPPORTED',
+            excluded_ips=[c.ip for c in (batch or []) if p.id == 'google-public-dns' or c.ip in origin_ips],
+            filter_reason='Нативный DNS-ответ не подтверждает поддержку обхода',
+            error=p.last_error, last_updated=p.last_updated) for p, batch in zip(sorted_providers, batches)]
+        by_ip = {}
         for p, p_cands in zip(sorted_providers, batches):
             try:
                 p_cands = p_cands or []
@@ -102,7 +114,12 @@ class ProviderManager:
                         continue
                     if c.ip not in seen_ips:
                         seen_ips.add(c.ip)
-                        candidates.append(c)
+                        item = CandidateIP(c.ip, c.provider_id, c.provider_name, c.region)
+                        item.sources = [dict(id=c.provider_id, name=c.provider_name)]
+                        by_ip[c.ip] = item
+                        candidates.append(item)
+                    elif c.ip in by_ip:
+                        by_ip[c.ip].sources.append(dict(id=c.provider_id, name=c.provider_name))
             except Exception as e:
                 p.last_error = str(e)
 
@@ -117,6 +134,6 @@ class ProviderManager:
             except Exception as error:
                 provider.last_error = str(error)
                 return False
-        results = parallel(providers, update, cancellation, timeout=6, limit=6)
+        results = parallel(providers, update, cancellation, timeout=30, limit=6)
         self._recent.clear()
         return {p.id: bool(result) for p, result in zip(providers, results)}

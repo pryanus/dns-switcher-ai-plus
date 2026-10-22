@@ -51,7 +51,7 @@ def main():
     args = parser.parse_args()
     if args.diagnose:
         from core.diagnostics import run
-        run(args.output)
+        run(args.output, data_dir=args.data_dir)
         return
 
 

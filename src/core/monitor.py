@@ -2,7 +2,7 @@
 import socket
 import time
 from datetime import datetime, timedelta
-from threading import Event
+from threading import Event, RLock
 from PySide6.QtCore import QThread, Signal, Qt
 from core.network import Cancellation, Cancelled, parallel
 from core.service_checks import checks_for, account_note
@@ -27,6 +27,9 @@ class VerificationWorker(QThread):
         self.prefer_provider_order = prefer_provider_order
         self.cancellation = Cancellation()
         self._is_cancelled = False
+        self._domain_pools = {}
+        self._detail_rows = {}
+        self._details_lock = RLock()
 
     def cancel(self):
         self._is_cancelled = True
@@ -35,11 +38,13 @@ class VerificationWorker(QThread):
     def _probe(self, ip, domain, path='/', accepted_codes=(), provider_name='current'):
         self.cancellation.check()
         result = ServiceVerifier.verify_candidate(ip, domain, path=path, timeout=6,
-            cancellation=self.cancellation, accepted_codes=accepted_codes)
+            cancellation=self.cancellation, accepted_codes=accepted_codes,
+            redirect_resolver=lambda host: [c.ip for c in self.provider_manager.get_candidates(host, self.cancellation)])
         import json
         from pathlib import Path
         from core.hosts_manager import _HOSTS_LOCK
         record = dict(result.to_dict(), provider=provider_name,
+                      redirect_attempts=getattr(result, 'redirect_attempts', []),
                       tcp='passed' if result.stage_reached in ('TLS', 'HTTP') else 'failed',
                       tls='passed' if result.stage_reached == 'HTTP' else 'failed' if result.stage_reached == 'TLS' else 'not_attempted')
         try:
@@ -89,40 +94,78 @@ class VerificationWorker(QThread):
         except OSError:
             return []
 
+    def _test_pool(self, candidates, domain, path, codes, sid, excluded=()):
+        # Бюджет зависит от числа волн; каждый IP получает собственный таймаут.
+        from threading import Lock
+        lock = Lock()
+        count = [0]
+        def test(c):
+            result = self._probe(c.ip, domain, path, codes, provider_name=c.provider_name)
+            with lock:
+                count[0] += 1
+                self.progress.emit(0, len(self.services),
+                    f'{domain}: проверено {count[0]}, осталось {len(candidates)-count[0]}, пропущено 0')
+            return result
+        results = parallel(candidates, test, self.cancellation,
+                           timeout=None, limit=8)
+        rows = []
+        for c, result in zip(candidates, results):
+            sources = getattr(c, 'sources', [dict(id=c.provider_id, name=c.provider_name)])
+            cache_info = [x for x in self.provider_manager.discovery.get(domain, [])
+                          if x['provider'] in [s['name'] for s in sources]]
+            rows.append(dict(domain=domain, ip=c.ip, provider_id=c.provider_id,
+                provider_name=', '.join(source['name'] for source in sources), sources=sources,
+                cache_info=cache_info,
+                status=result.status.value if result else 'UNKNOWN',
+                category=getattr(result, 'final_category', result.category) if result else 'SKIPPED',
+                latency_ms=result.latency_ms if result else 0,
+                details=result.details if result else 'Не проверен: бюджет или ошибка задачи',
+                routable=bool(result and result.is_routable),
+                browser_required=bool(result and result.is_browser_challenge)))
+        redirect_rows = {}
+        for result in results:
+            for attempt in getattr(result, 'redirect_attempts', []):
+                name, ip = attempt['domain'], attempt['ip']
+                source_names = [x['provider'] for x in self.provider_manager.discovery.get(name, [])
+                                if ip in x['ips']]
+                row = dict(attempt, provider_name=', '.join(source_names) or 'Цель редиректа',
+                           routable=attempt['status'] == 'OK',
+                           browser_required=attempt['category'] == 'CLOUDFLARE_CHALLENGE')
+                key = (name, ip)
+                if key not in redirect_rows or row['routable']:
+                    redirect_rows[key] = row
+        rows += list(redirect_rows.values())
+        rows += [dict(domain=domain, ip=c.ip, provider_name=c.provider_name, status='UNKNOWN',
+                      category='SKIPPED', details='Текущий или ранее отклонённый IP исключён из этого подбора',
+                      routable=False) for c in excluded]
+        rows += [dict(domain=domain, ip=ip, provider_name=x['provider'], status='UNKNOWN',
+                      category='SKIPPED', details=x['filter_reason'], routable=False)
+                 for x in self.provider_manager.discovery.get(domain, []) for ip in x.get('excluded_ips', [])]
+        rows += [dict(domain=domain, ip='', provider_name=x['provider'], status='UNKNOWN',
+                      category=x['state'], details=x.get('error') or 'Нет IP для этого имени', routable=False)
+                 for x in self.provider_manager.discovery.get(domain, []) if not x['ips']]
+        with self._details_lock:
+            self._detail_rows.setdefault(sid, {})[domain] = rows
+            self.candidates_ready.emit(sid, [row for group in self._detail_rows[sid].values() for row in group])
+        return results
+
     def _domain_route(self, check, selected, entries, current=False, required=True, service_id=None):
         domain, path, label, codes = check
         self.cancellation.check()
-        provider_name = selected.provider_name
-        names = {}
         if current:
-            ips = entries.get(domain, []) or self._resolve(domain)
+            candidates = [CandidateIP(ip, 'current', 'Из hosts') for ip in entries.get(domain, []) or self._resolve(domain)]
         else:
-            if required:
-                provider = self.provider_manager.get_provider(selected.provider_id)
-                if provider is not None:
-                    alternatives = self.provider_manager.get_candidates(domain, self.cancellation, provider_id=selected.provider_id)
-                else:
-                    alternatives = [c for c in self.provider_manager.get_candidates(domain, self.cancellation)
-                                    if c.provider_id == selected.provider_id]
-                ips = [c.ip for c in alternatives]
-                names = {c.ip: c.provider_name for c in alternatives}
-            else:
-                provider = self.provider_manager.get_provider(selected.provider_id)
-                ips = [c.ip for c in provider.fetch_candidates(domain)] if provider else [selected.ip]
-        # Пропущенные маршруты относятся к главному домену. Рабочий API/CDN может
-        # иметь тот же IP и остаётся доступным для другого маршрута приложения.
-        ips = list(dict.fromkeys(ips))[:64]
-        if not ips:
-            return dict(domain=domain, label=label, ok=False, details='Нет адреса у провайдера')
-        probes = parallel(ips, lambda ip: self._probe(ip, domain, path, codes, provider_name=names.get(ip, provider_name)),
-                          self.cancellation, timeout=7, limit=64)
-        good = min((r for r in probes if r and r.is_routable),
-                   key=lambda r: (r.ip != selected.ip, r.latency_ms), default=None)
-        last = good or next((r for r in probes if r), None)
+            candidates = self.provider_manager.get_candidates(domain, self.cancellation)
+        key = (domain, path, tuple(c.ip for c in candidates), tuple(codes))
+        if key not in self._domain_pools:
+            self._domain_pools[key] = self._test_pool(candidates, domain, path, codes, service_id)
+        results = self._domain_pools[key]
+        good = min((x for x in results if x and x.is_routable), key=lambda x: (x.ip != selected.ip, x.latency_ms), default=None)
+        names = {c.ip: c.provider_name for c in candidates}
+        last = good or next((x for x in results if x), None)
         return dict(domain=domain, label=label, ok=bool(good), ip=good.ip if good else '',
-                    provider=names.get(good.ip, provider_name) if good else provider_name,
-                    details=last.details if last else 'Тайм-аут',
-                    challenge=bool(good and good.is_browser_challenge))
+                    provider=names.get(good.ip, '') if good else '',
+                    details=last.details if last else 'Источник не поддерживает домен / не проверено', challenge=False, redirects=getattr(good, 'redirect_checks', []) if good else [])
 
     def _check_service(self, service, summary):
         if service.routing_mode != 'geo':
@@ -132,7 +175,6 @@ class VerificationWorker(QThread):
             self.service_result.emit(service.id, result, '')
             summary['failed'] += 1
             return
-        deadline = time.monotonic() + 90
         entries = self.hosts_manager.get_service_current_ips(service.domains)
         current_ips = entries.get(service.primary_domain, [])
         current_ip = current_ips[0] if current_ips else ''
@@ -214,13 +256,13 @@ class VerificationWorker(QThread):
 
         self.progress.emit(self.services.index(service) + 1, len(self.services),
                            f'{service.name}: {len(candidates)} IP, всего в пуле {len(pool)}')
-        results = parallel(candidates, lambda c: self._probe(c.ip, primary[0], primary[1], primary[3], provider_name=c.provider_name),
-                           self.cancellation, timeout=7, limit=64)
+        results = self._test_pool(candidates, primary[0], primary[1], primary[3], service.id,
+                                  excluded=[c for c in pool if c not in candidates])
         checked = []
         viable = []
         for candidate, probe in zip(candidates, results):
             checked.append(dict(ip=candidate.ip, provider_id=candidate.provider_id, provider_name=candidate.provider_name,
-                status=probe.status.value if probe else 'DEAD', latency_ms=probe.latency_ms if probe else 0,
+                status=probe.status.value if probe else 'UNKNOWN', latency_ms=probe.latency_ms if probe else 0,
                 details=probe.details if probe else 'Тайм-аут', routable=bool(probe and probe.is_routable),
                 browser_required=bool(probe and probe.is_browser_challenge)))
             if probe and probe.is_routable:
@@ -233,39 +275,25 @@ class VerificationWorker(QThread):
                                           item[1].latency_ms))
         selected = best = report = None
         failure_report = []
-        failed_providers = set()
         for candidate, probe in viable:
             self.cancellation.check()
-            if candidate.provider_id in failed_providers:
-                continue
-            if time.monotonic() >= deadline - 2:
-                break
             self.progress.emit(self.services.index(service) + 1, len(self.services),
                                service.name + ': вход, API, файлы — ' + candidate.provider_name)
             current = candidate.provider_id == 'current'
             other_checks = [check for check in checks if check[0] != service.primary_domain]
             reports = parallel(other_checks, lambda check: self._domain_route(check, candidate, entries, current,
                                service_id=service.id),
-                               self.cancellation, timeout=min(15, max(.1, deadline - time.monotonic())), limit=8)
+                               self.cancellation, timeout=None, limit=8)
             reports = [r or dict(domain=c[0], label=c[2], ok=False, details='Тайм-аут')
                        for c, r in zip(other_checks, reports)]
             reports.insert(0, dict(domain=service.primary_domain, label=primary[2], ok=True,
                 ip=candidate.ip, provider=candidate.provider_name, details=probe.details,
-                challenge=probe.is_browser_challenge))
+                challenge=probe.is_browser_challenge, redirects=getattr(probe, 'redirect_checks', [])))
             failure_report = reports
             if all(r['ok'] for r in reports):
                 selected, best, report = candidate, probe, reports
                 break
-            for row in checked:
-                if row['provider_id'] == candidate.provider_id:
-                    row['routable'] = False
-                    row['status'] = 'DEAD'
-                    row['details'] = '; '.join(r['domain'] + ': ' + r['details'] for r in reports if not r['ok'])
-            # У этого провайдера проверен весь пул критичных доменов.
-            # Следующий провайдер может иметь рабочий вход/API, даже если первый не подошёл.
-            failed_providers.add(candidate.provider_id)
         self.cancellation.check()
-        self.candidates_ready.emit(service.id, checked)
         if selected is None:
             details = ('Других подходящих маршрутов сейчас нет. Текущий адрес сохранён.' if self.rotate else
                        'Проверенные маршруты не отвечают на нужные запросы. Текущий адрес сохранён.')
@@ -280,13 +308,18 @@ class VerificationWorker(QThread):
             result.alternative_failed = self.rotate
             result.route_message = 'Других маршрутов нет' if self.rotate else 'Подбор без изменений'
             result.pool_size = len(pool)
-            result.checked_count = len(checked)
-            result.outcome = f'IP не изменён · проверено {len(checked)} из {len(pool)} адресов'
+            result.checked_count = sum(probe is not None for probe in results)
+            result.skipped_count = len(pool) - result.checked_count
+            result.remaining_count = 0
+            result.outcome = f'IP не изменён · проверено {sum(probe is not None for probe in results)} из {len(pool)} адресов'
             self.service_result.emit(service.id, result, '')
             summary['failed'] += 1
             return
 
         mappings = {r['domain']: r['ip'] for r in report}
+        for row in report:
+            for target in row.get('redirects', []):
+                if target['status'] == 'OK': mappings[target['domain']] = target['ip']
         if self.rotate and selected.ip in rejected:
             self.storage.config.rejected_routes[service.id] = [current_ip] if current_ip else []
             self.storage.save_config()
@@ -303,10 +336,12 @@ class VerificationWorker(QThread):
             self.progress.emit(self.services.index(service) + 1, len(self.services), service.name + ': ресурсы и CDN')
             extras = parallel(extra, lambda d: self._domain_route((d, '/', d, (401, 404, 302, 307)),
                 selected, entries, required=False, service_id=service.id), self.cancellation,
-                timeout=min(30, max(.1, deadline - time.monotonic())), limit=8)
+                timeout=None, limit=8)
             for row in extras:
                 if row and row['ok']:
                     mappings[row['domain']] = row['ip']
+                    for target in row.get('redirects', []):
+                        if target['status'] == 'OK': mappings[target['domain']] = target['ip']
             report += [row or dict(domain=domain, label=domain, ok=False,
                                    details='Не подтверждён за отведённое время')
                        for domain, row in zip(extra, extras)]
@@ -328,11 +363,13 @@ class VerificationWorker(QThread):
         best.is_current = not self.auto_fix
         best.confirmable = (self.auto_fix or bool(current_ip)) and not bool(conflicts) and not browser_required
         best.pool_size = len(pool)
-        best.checked_count = len(checked)
+        best.checked_count = sum(probe is not None for probe in results)
+        best.skipped_count = len(pool) - best.checked_count
+        best.remaining_count = 0
         best.browser_required = browser_required
         best.route_message = 'Нужна браузерная проверка' if browser_required else ''
         best.outcome = (f"{current_ip or 'Системный DNS'} → {selected.ip}" if self.auto_fix else selected.ip)
-        best.outcome += f' · проверено {len(checked)} из {len(pool)} адресов'
+        best.outcome += f' · проверено {sum(probe is not None for probe in results)} из {len(pool)} адресов'
         best.details = '\n'.join(r['label'] + ': ' + ('Cloudflare: доступ к функциям не подтверждён'
             if r.get('challenge') else 'HTTPS доступен' if r['ok'] else r['details']) +
             ' · ' + r.get('provider', selected.provider_name) for r in report)

@@ -113,7 +113,11 @@ class CustomProvider(BaseProvider):
             return []
 
         # 2. Cached check
-        if clean_d in self._ip_cache:
+        try:
+            cache_fresh = (datetime.now() - datetime.fromisoformat(self.last_updated)).total_seconds() < 86400
+        except (TypeError, ValueError):
+            cache_fresh = False
+        if clean_d in self._ip_cache and (self.provider_type == self.TYPE_HOSTS_URL or cache_fresh):
             return [CandidateIP(ip, self.id, self.name, "Custom") for ip in self._ip_cache[clean_d]]
 
         # 3. Resolve based on type
@@ -128,6 +132,8 @@ class CustomProvider(BaseProvider):
 
         if resolved:
             self._ip_cache[clean_d] = resolved
+            self.last_updated = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            self.last_error = None
             self._save_cache()
 
         return [CandidateIP(ip, self.id, self.name, "Custom") for ip in resolved]
@@ -203,6 +209,15 @@ class CustomProvider(BaseProvider):
                 self.last_error = str(e)
                 return False
 
+        if self.provider_type in (self.TYPE_DOH, self.TYPE_PLAIN_DNS):
+            resolver = self._resolve_doh if self.provider_type == self.TYPE_DOH else self._resolve_plain_dns
+            domains = list(self._ip_cache) or ['canva.com']
+            from core.network import parallel
+            refreshed = dict(zip(domains, parallel(domains, resolver, timeout=None, limit=6)))
+            if not any(refreshed.values()):
+                self.last_error = 'Нет свежих DNS-ответов; прежний кэш сохранён'
+                return False
+            self._ip_cache = {domain: ips for domain, ips in refreshed.items() if ips}
         self.last_updated = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         self._save_cache()
         return True

@@ -70,12 +70,12 @@ def parallel(items, function, cancellation=None, timeout=5.0, limit=6):
 
     for _ in range(min(limit, len(items))):
         Thread(target=run, daemon=True).start()
-    deadline = time.monotonic() + timeout
+    deadline = None if timeout is None else time.monotonic() + timeout
     count = 0
     try:
         while count < len(items):
             token.check()
-            remaining = deadline - time.monotonic()
+            remaining = 0.03 if deadline is None else deadline - time.monotonic()
             if remaining <= 0:
                 break
             try:

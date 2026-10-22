@@ -12,6 +12,29 @@ from providers.manager import ProviderManager
 
 
 class TestProviders(unittest.TestCase):
+    def test_duplicate_ips_keep_all_source_names(self):
+        manager = ProviderManager()
+        for p in manager.list_providers(): p.enabled = False
+        for pid in ('first', 'second'):
+            manager.add_custom_provider(CustomProvider(pid, pid, 'manual', '', {'example.com': '1.1.1.1'}))
+        pool = manager.get_candidates('example.com')
+        self.assertEqual(len(pool), 1)
+        self.assertEqual({s['id'] for s in pool[0].sources}, {'first', 'second'})
+
+    def test_update_requeries_persistent_doh_cache_and_invalidates_manager_cache(self):
+        manager = ProviderManager()
+        for p in manager.list_providers(): p.enabled = False
+        provider = CustomProvider('test', 'test', 'doh', 'https://example.com/dns-query')
+        provider._ip_cache = {'example.com': ['1.1.1.1']}
+        provider.last_updated = '2000-01-01 00:00:00'
+        manager.add_custom_provider(provider)
+        manager._recent[('test', 'example.com')] = (0, [])
+        with patch.object(provider, '_resolve_doh', return_value=['8.8.4.4']) as resolve:
+            self.assertTrue(manager.update_all_databases()['test'])
+            resolve.assert_called_once_with('example.com')
+        self.assertEqual(manager._recent, {})
+        self.assertEqual([c.ip for c in manager.get_candidates('example.com')], ['8.8.4.4'])
+
     def test_builtin_catalog_is_backed_by_published_provider_lists(self):
         import json
         from core.catalog import Catalog
