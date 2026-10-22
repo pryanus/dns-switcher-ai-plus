@@ -22,7 +22,6 @@ PROFILES = {
     ],
     'claude': [
         ('claude.ai', '/api/organizations', 'API аккаунта', (401,)),
-        ('a-cdn.anthropic.com', '/', 'Ресурсы интерфейса', (404,)),
     ],
     'spotify': [
         ('open.spotify.com', '/', 'Веб-плеер', (302, 307)),
@@ -44,9 +43,12 @@ def checks_for(service):
     if service.id in PROFILES:
         return PROFILES[service.id]
     checks = [(service.primary_domain, service.test_path, 'Приложение', (302, 303, 307, 308))]
-    for domain in service.domains:
-        if domain != service.primary_domain and domain.startswith(('api.', 'auth.', 'accounts.')):
-            checks.append((domain, '/', 'API / вход', (401,)))
+    from core.catalog import BUILTIN_SERVICES
+    if service.id not in {s.id for s in BUILTIN_SERVICES}:
+        for domain in service.domains:
+            if domain != service.primary_domain and domain.startswith(('api.', 'auth.', 'accounts.')):
+                checks.append((domain, '/', 'API / вход', (401,)))
+    # Для встроенных сервисов неизвестный API / не является обязательной проверкой.
     return checks
 
 

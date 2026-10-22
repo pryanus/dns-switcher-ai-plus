@@ -32,10 +32,25 @@ class VerificationWorker(QThread):
         self._is_cancelled = True
         self.cancellation.cancel()
 
-    def _probe(self, ip, domain, path='/', accepted_codes=()):
+    def _probe(self, ip, domain, path='/', accepted_codes=(), provider_name='current'):
         self.cancellation.check()
-        return ServiceVerifier.verify_candidate(ip, domain, path=path, timeout=2.5,
+        result = ServiceVerifier.verify_candidate(ip, domain, path=path, timeout=6,
             cancellation=self.cancellation, accepted_codes=accepted_codes)
+        import json
+        from pathlib import Path
+        from core.hosts_manager import _HOSTS_LOCK
+        record = dict(result.to_dict(), provider=provider_name,
+                      tcp='passed' if result.stage_reached in ('TLS', 'HTTP') else 'failed',
+                      tls='passed' if result.stage_reached == 'HTTP' else 'failed' if result.stage_reached == 'TLS' else 'not_attempted')
+        try:
+            with _HOSTS_LOCK:
+                folder = self.storage.data_dir / 'diagnostics'
+                folder.mkdir(exist_ok=True)
+                with (folder / 'routes.jsonl').open('a', encoding='utf-8') as stream:
+                    stream.write(json.dumps(record, ensure_ascii=False) + '\n')
+        except OSError:
+            pass
+        return result
 
     def _provider_rank(self, provider_id):
         provider = self.provider_manager.get_provider(provider_id)
@@ -83,12 +98,14 @@ class VerificationWorker(QThread):
             ips = entries.get(domain, []) or self._resolve(domain)
         else:
             if required:
-                alternatives = [c for c in self.provider_manager.get_candidates(domain, self.cancellation)
-                                if c.provider_id == selected.provider_id]
+                provider = self.provider_manager.get_provider(selected.provider_id)
+                if provider is not None:
+                    alternatives = self.provider_manager.get_candidates(domain, self.cancellation, provider_id=selected.provider_id)
+                else:
+                    alternatives = [c for c in self.provider_manager.get_candidates(domain, self.cancellation)
+                                    if c.provider_id == selected.provider_id]
                 ips = [c.ip for c in alternatives]
                 names = {c.ip: c.provider_name for c in alternatives}
-                if not ips and self.forced:
-                    ips = [selected.ip]
             else:
                 provider = self.provider_manager.get_provider(selected.provider_id)
                 ips = [c.ip for c in provider.fetch_candidates(domain)] if provider else [selected.ip]
@@ -97,8 +114,8 @@ class VerificationWorker(QThread):
         ips = list(dict.fromkeys(ips))[:64]
         if not ips:
             return dict(domain=domain, label=label, ok=False, details='Нет адреса у провайдера')
-        probes = parallel(ips, lambda ip: self._probe(ip, domain, path, codes),
-                          self.cancellation, timeout=3.0, limit=64)
+        probes = parallel(ips, lambda ip: self._probe(ip, domain, path, codes, provider_name=names.get(ip, provider_name)),
+                          self.cancellation, timeout=7, limit=64)
         good = min((r for r in probes if r and r.is_routable),
                    key=lambda r: (r.ip != selected.ip, r.latency_ms), default=None)
         last = good or next((r for r in probes if r), None)
@@ -115,7 +132,7 @@ class VerificationWorker(QThread):
             self.service_result.emit(service.id, result, '')
             summary['failed'] += 1
             return
-        deadline = time.monotonic() + 24
+        deadline = time.monotonic() + 90
         entries = self.hosts_manager.get_service_current_ips(service.domains)
         current_ips = entries.get(service.primary_domain, [])
         current_ip = current_ips[0] if current_ips else ''
@@ -129,13 +146,13 @@ class VerificationWorker(QThread):
                                     self.cancellation, timeout=1.5)[0]
                 ips = resolved or []
             probes = parallel(ips[:2], lambda ip: self._probe(ip, primary[0], primary[1], primary[3]),
-                              self.cancellation, timeout=3)
+                              self.cancellation, timeout=7)
             good = next((probe for probe in probes if probe and probe.is_routable), None)
             if good:
                 selected_current = CandidateIP(good.ip, 'current', 'Из hosts')
                 critical = parallel([c for c in checks if c[0] != service.primary_domain],
                     lambda c: self._domain_route(c, selected_current, entries, current=True),
-                    self.cancellation, timeout=4, limit=8)
+                    self.cancellation, timeout=12, limit=8)
                 if not all(row and row['ok'] for row in critical):
                     good = None
             if good:
@@ -197,8 +214,8 @@ class VerificationWorker(QThread):
 
         self.progress.emit(self.services.index(service) + 1, len(self.services),
                            f'{service.name}: {len(candidates)} IP, всего в пуле {len(pool)}')
-        results = parallel(candidates, lambda c: self._probe(c.ip, primary[0], primary[1], primary[3]),
-                           self.cancellation, timeout=3.0, limit=64)
+        results = parallel(candidates, lambda c: self._probe(c.ip, primary[0], primary[1], primary[3], provider_name=c.provider_name),
+                           self.cancellation, timeout=7, limit=64)
         checked = []
         viable = []
         for candidate, probe in zip(candidates, results):
@@ -229,7 +246,7 @@ class VerificationWorker(QThread):
             other_checks = [check for check in checks if check[0] != service.primary_domain]
             reports = parallel(other_checks, lambda check: self._domain_route(check, candidate, entries, current,
                                service_id=service.id),
-                               self.cancellation, timeout=min(7.5, max(.1, deadline - time.monotonic())), limit=8)
+                               self.cancellation, timeout=min(15, max(.1, deadline - time.monotonic())), limit=8)
             reports = [r or dict(domain=c[0], label=c[2], ok=False, details='Тайм-аут')
                        for c, r in zip(other_checks, reports)]
             reports.insert(0, dict(domain=service.primary_domain, label=primary[2], ok=True,
@@ -286,7 +303,7 @@ class VerificationWorker(QThread):
             self.progress.emit(self.services.index(service) + 1, len(self.services), service.name + ': ресурсы и CDN')
             extras = parallel(extra, lambda d: self._domain_route((d, '/', d, (401, 404, 302, 307)),
                 selected, entries, required=False, service_id=service.id), self.cancellation,
-                timeout=min(7, max(.1, deadline - time.monotonic())), limit=8)
+                timeout=min(30, max(.1, deadline - time.monotonic())), limit=8)
             for row in extras:
                 if row and row['ok']:
                     mappings[row['domain']] = row['ip']

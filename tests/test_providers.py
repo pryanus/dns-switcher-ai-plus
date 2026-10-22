@@ -78,6 +78,16 @@ class TestProviders(unittest.TestCase):
              patch.object(smart, 'fetch_candidates', return_value=[CandidateIP('8.8.8.8', smart.id, smart.name), CandidateIP('1.1.1.1', smart.id, smart.name)]):
             self.assertEqual([c.ip for c in manager.get_candidates('example.com')], ['1.1.1.1'])
 
+    def test_provider_scoped_candidates_do_not_lose_shared_ip_to_another_provider(self):
+        manager = ProviderManager()
+        first = CustomProvider('first', 'First', 'manual', '', {'example.com': '1.1.1.1'})
+        second = CustomProvider('second', 'Second', 'manual', '', {'example.com': '1.1.1.1'})
+        for p in manager.list_providers(): p.enabled = False
+        manager.add_custom_provider(first)
+        manager.add_custom_provider(second)
+        self.assertEqual(manager.get_candidates('example.com', provider_id='second')[0].provider_id, 'second')
+        self.assertEqual(manager.get_candidates('unknown.example', provider_id='second'), [])
+
     def test_provider_manager_dedup_and_priority(self):
         manager = ProviderManager()
         with patch.object(GeoHideProvider, 'fetch_candidates', return_value=[CandidateIP('1.1.1.1', 'geohide-ru', 'GeoHide')]), \

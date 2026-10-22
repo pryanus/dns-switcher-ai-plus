@@ -582,6 +582,21 @@ class MainWindow(QMainWindow):
     def _on_hosts_imported(self, path: str) -> None:
         parsed = self.hosts_manager.parse_geohide_services(path)
         added_count = self.catalog.import_hosts_services(parsed)
+        import hashlib
+        from pathlib import Path
+        from providers.custom import CustomProvider
+        pid = 'imported-' + hashlib.sha256(str(Path(path).resolve()).encode()).hexdigest()[:12]
+        provider = CustomProvider(pid, 'Импорт hosts', CustomProvider.TYPE_HOSTS_URL, str(Path(path).resolve()),
+                                  cache_dir=str(self.storage.data_dir / 'cache'))
+        if not provider.update_database():
+            QMessageBox.warning(self, 'Импорт hosts', provider.last_error or 'Не удалось загрузить IP')
+            return
+        self.provider_manager.add_custom_provider(provider)
+        self.provider_manager._recent.clear()
+        self.storage.config.custom_providers = [p for p in self.storage.config.custom_providers if p.get('id') != pid]
+        self.storage.config.custom_providers.append(provider.to_dict())
+        self.storage.config.custom_services = [s.to_dict() for s in self.catalog.list_all() if s.is_custom or any(d in group['domains'] for group in parsed.values() for d in s.domains)]
+        self.storage.save_config()
         self._populate_services()
         QMessageBox.information(
             self,

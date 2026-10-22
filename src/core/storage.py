@@ -36,7 +36,7 @@ class AppConfig:
         self.hidden_services = list(hidden_services or [])
         self.rejected_routes = rejected_routes or {}
         self.theme = theme
-        self.favorites = list(favorites) if favorites is not None else ["spotify", "chatgpt", "gemini"]
+        self.favorites = list(favorites) if favorites is not None else ["spotify", "chatgpt", "gemini", "claude"]
         self.providers_enabled = providers_enabled or {
             "geohide-ru": True,
             "geohide-eu": True,
@@ -86,7 +86,7 @@ class AppConfig:
             hidden_services=data.get("hidden_services", []),
             rejected_routes=data.get("rejected_routes", {}),
             theme=data.get("theme", "dark"),
-            favorites=data.get("favorites", ["spotify", "chatgpt", "gemini"]),
+            favorites=data.get("favorites", ["spotify", "chatgpt", "gemini", "claude"]),
             providers_enabled=data.get("providers_enabled", {}),
             auto_update_db=data.get("auto_update_db", False),
             auto_update_interval_hours=data.get("auto_update_interval_hours", 24),
@@ -122,7 +122,7 @@ class StorageManager:
         self.config_path = self.data_dir / "config.json"
         self.config: AppConfig = self.load_config()
         if self.config.catalog_revision < 3:
-            self.config.favorites = ["spotify", "chatgpt", "gemini"]
+            self.config.favorites = ["spotify", "chatgpt", "gemini", "claude"]
             self.config.theme = "dark"
             self.config.catalog_revision = 3
             self.config.minimize_to_tray = False

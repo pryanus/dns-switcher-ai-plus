@@ -6,4 +6,4 @@
 - Never publish user settings, personal hosts, backups, caches, credentials or local paths.
 - Never change the real system hosts or network settings during agent tests. Use temporary files; do not probe ChatGPT live.
 - Do not label homepage reachability as full functionality. Mark unsupported DNS/DPI cases honestly.
-- Keep the dark interface and default favorites Spotify, ChatGPT and Gemini. Closing the window hides it in the tray; Exit stops workers and quits.
+- Keep the dark interface and default favorites Spotify, ChatGPT, Gemini and Claude. Closing the window hides it in the tray; Exit stops workers and quits.

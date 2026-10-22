@@ -62,7 +62,7 @@ class ProviderManager:
             return True
         return False
 
-    def get_candidates(self, domain: str, cancellation=None) -> List[CandidateIP]:
+    def get_candidates(self, domain: str, cancellation=None, provider_id=None) -> List[CandidateIP]:
         """
         Retrieves candidate IPs for a domain across all enabled providers,
         sorted by provider priority, with duplicates eliminated.
@@ -71,7 +71,7 @@ class ProviderManager:
         seen_ips = set()
 
         sorted_providers = sorted(
-            [p for p in self.providers.values() if p.enabled],
+            [p for p in self.providers.values() if p.enabled and (provider_id is None or p.id == provider_id)],
             key=lambda p: p.priority,
             reverse=True
         )

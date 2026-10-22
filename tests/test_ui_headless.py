@@ -61,7 +61,7 @@ class TestUIHeadless(unittest.TestCase):
         # Verify ChatGPT card exists
         self.assertIn("chatgpt", self.window.service_cards)
         self.assertEqual(self.window.tab_bar.currentIndex(), 0)
-        self.assertEqual(set(self.window.service_cards), {'spotify', 'chatgpt', 'gemini'})
+        self.assertEqual(set(self.window.service_cards), {'spotify', 'chatgpt', 'gemini', 'claude'})
         self.assertGreaterEqual(self.window.fav_layout.indexOf(self.window.service_cards['chatgpt']), 0)
 
     def test_search_filtering(self):
@@ -207,20 +207,33 @@ class TestUIHeadless(unittest.TestCase):
 
     def test_switched_ip_and_pool_count_are_visible_on_card(self):
         from core.verifier import VerificationResult, ServiceStatus
-        card = self.window.service_cards['gemini']
+        card = self.window.service_cards['claude']
         card.set_current_ip('1.1.1.1')
-        result = VerificationResult('8.8.4.4', 'gemini.google.com', ServiceStatus.OK, 10)
+        result = VerificationResult('8.8.4.4', 'claude.ai', ServiceStatus.PARTIAL, 10)
         result.applied = True
-        result.route_message = ''
+        result.route_message = 'Нужна браузерная проверка'
         result.outcome = '1.1.1.1 → 8.8.4.4 · проверено 19 из 20 адресов'
         card.set_verification_result(result, 'GeoHide (EU)')
-        card.set_candidates([dict(ip='8.8.4.4', provider_name='GeoHide (EU)', status='OK',
-                                  routable=True) for _ in range(19)])
+        card.set_candidates([dict(ip='8.8.4.4', provider_name='GeoHide (EU)', status='PARTIAL',
+                                  browser_required=True) for _ in range(19)])
         self.assertIn('8.8.4.4', card.ip_badge.text())
         self.assertIn('1.1.1.1 → 8.8.4.4', card.help_label.text())
         self.assertFalse(card.help_label.isHidden())
-        self.assertEqual(card.status_badge.text(), 'Маршрут отвечает')
+        self.assertEqual(card.status_badge.text(), 'Нужна браузерная проверка')
         self.assertIn('19', card.expand_btn.text())
+
+    def test_hosts_import_preserves_all_ips_as_a_persistent_candidate_source(self):
+        from unittest.mock import patch
+        file = Path(self.temp_dir) / 'imported-hosts'
+        file.write_text('# Canva\n1.1.1.1 canva.com # note\n8.8.4.4 canva.com\n# Claude AI\n9.9.9.9 claude.ai\n')
+        with patch('ui.main_window.QMessageBox.information'):
+            self.window._on_hosts_imported(str(file))
+        provider = next(p for p in self.provider_mgr.list_providers() if p.id.startswith('imported-'))
+        self.assertEqual({c.ip for c in provider.fetch_candidates('canva.com')}, {'1.1.1.1', '8.8.4.4'})
+        self.assertEqual([c.ip for c in provider.fetch_candidates('claude.ai')], ['9.9.9.9'])
+        self.assertIn(provider.id, {p['id'] for p in self.storage.config.custom_providers})
+        self.assertIsNotNone(self.catalog.get_service('claude'))
+        self.assertNotIn('note', provider._ip_cache)
 
     def test_add_dialog_flow(self):
         dlg = AddDialog(existing_categories=["AI", "Dev"], parent=self.window)

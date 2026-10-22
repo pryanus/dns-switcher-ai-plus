@@ -480,10 +480,10 @@ class HostsManager:
                 continue
 
             # Line with IP and domains
-            parts = trimmed.split()
+            parts = trimmed.partition("#")[0].split()
             if len(parts) >= 2:
                 ip = parts[0]
-                domains = [d.lower() for d in parts[1:] if not d.startswith("#")]
+                domains = [domain_name(d) for d in parts[1:]]
                 current_ips.add(ip)
                 current_domains.update(domains)
 
