@@ -81,6 +81,20 @@ class TestUIHeadless(unittest.TestCase):
         self.assertTrue(card.is_expanded)
         self.assertFalse(card.detail_widget.isHidden())
 
+    def test_old_route_does_not_claim_access_and_has_no_diagnostic_tooltip(self):
+        from core.verifier import ServiceStatus, VerificationResult
+        card = self.window.service_cards['spotify']
+        card.set_current_ip('1.1.1.1', dict(status='DEAD', provider_name='GeoHide',
+            details='A long saved diagnostic'))
+        self.assertTrue(card.status_badge.isHidden())
+        self.assertEqual(card.status_badge.toolTip(), '')
+        self.assertTrue(card.help_label.isHidden())
+        result = VerificationResult('1.1.1.1', 'open.spotify.com', ServiceStatus.DEAD, 1, 'Probe failed')
+        card.set_verification_result(result, 'GeoHide')
+        self.assertEqual(card.status_badge.text(), 'Маршрут не найден')
+        self.assertEqual(card.status_badge.toolTip(), '')
+        self.assertTrue(card.help_label.isHidden())
+
     def test_favorite_icon_and_current_provider_label(self):
         from core.verifier import VerificationResult, ServiceStatus
         card = self.window.service_cards['gemini']

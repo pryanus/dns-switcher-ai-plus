@@ -23,6 +23,8 @@ class ServiceCard(QWidget):
         super().__init__(parent)
         self.service, self.current_ip = service, current_ip
         self.route_info = route_info or {}
+        self._has_fresh_result = False
+        self._result_applied = False
         self.is_expanded = False
         self.candidates = []
         self.setObjectName('serviceCard')
@@ -130,9 +132,6 @@ class ServiceCard(QWidget):
             button.setCursor(Qt.PointingHandCursor)
         self._update_display()
         if service.routing_mode != 'geo':
-            self.help_label.setText(service.description)
-            self.help_label.show()
-            self.status_badge.setText('Нужен обход DPI' if service.routing_mode == 'dpi' else 'Обход не подтверждён')
             self.action_btn.setText('Подробнее')
             self.action_btn.clicked.disconnect()
             self.action_btn.clicked.connect(self.toggle_expanded)
@@ -162,6 +161,8 @@ class ServiceCard(QWidget):
         self._update_display()
 
     def set_verification_result(self, result, provider_name=''):
+        self._has_fresh_result = True
+        self._result_applied = getattr(result, 'applied', False)
         if getattr(result, 'applied', False):
             self.current_ip = result.ip
         current_provider = self.route_info.get('provider_name', '')
@@ -190,28 +191,21 @@ class ServiceCard(QWidget):
         provider = self.route_info.get('provider_name', '')
         self.ip_badge.setText(f"{provider or 'Из hosts'} · {self.current_ip}" if self.current_ip else 'Системный DNS')
         status = self.route_info.get('status', 'UNKNOWN')
-        label, color = {'OK': ('Работает', '#7acb9c'), 'PARTIAL': ('Откройте сервис', '#e1b36d'),
-                        'DEAD': ('Нет доступа', '#f08f8f')}.get(status, ('Не проверен', '#aaaab2'))
+        label, color = {'OK': ('Проверено', '#aaaab2'),
+                        'PARTIAL': ('DNS применён' if self._result_applied else 'Проверка завершена', '#aaaab2'),
+                        'DEAD': ('Маршрут не найден', '#aaaab2')}.get(status, ('', '#aaaab2'))
         if self.route_info.get('suggested'):
             label, color = 'Найден маршрут', '#79adff'
         self.feedback_row.setVisible(True)
         self.next_btn.setEnabled(self.service.routing_mode == 'geo')
         self.confirm_btn.setEnabled(bool(self.current_ip) and self.route_info.get('confirmable', True))
 
-        message = ''
-        if status == 'PARTIAL':
-            message = 'Откройте сервис, проверьте вход, запрос и файл. Затем «Работает» или «Другой маршрут».'
-        elif status == 'DEAD':
-            message = self.route_info.get('details', '').split('\n')[0]
-        self.help_label.setText(message)
-        self.help_label.setVisible(bool(message))
+        self.help_label.clear()
+        self.help_label.hide()
         self.status_badge.setText(label)
-        if self.service.routing_mode != 'geo':
-            self.help_label.setText(self.service.description)
-            self.help_label.show()
-            self.status_badge.setText('Нужен обход DPI' if self.service.routing_mode == 'dpi' else 'Обход не подтверждён')
+        self.status_badge.setVisible(self._has_fresh_result and bool(label))
         self.status_badge.setStyleSheet(f'font-size: 14px; color: {color};')
-        self.status_badge.setToolTip(self.route_info.get('details', ''))
+        self.status_badge.setToolTip('')
 
     def _render_candidates(self):
         while self.candidates_box.count():
@@ -226,7 +220,6 @@ class ServiceCard(QWidget):
             label.setTextFormat(Qt.PlainText)
             label.setWordWrap(True)
             label.setStyleSheet('font-size: 14px;')
-            label.setToolTip(candidate.get('details', ''))
             layout.addWidget(label, 1)
             if candidate['status'] == 'OK' or candidate.get('routable'):
                 button = QPushButton('Выбрать')
