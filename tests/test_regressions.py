@@ -34,6 +34,9 @@ class Regressions(unittest.TestCase):
         self.hm = HostsManager(str(self.hosts), str(self.root / 'backups'))
         self.storage = StorageManager(str(self.root / 'data'))
         self.providers = ProviderManager()
+        for provider in self.providers.list_providers():
+            if hasattr(provider, 'resolve_domain_doh'):
+                provider.resolve_domain_doh = MagicMock(return_value=[])
         self.service = ServiceDef(id='example', name='Example', category='Test',
             primary_domain='example.com', domains=['example.com', 'api.example.com'])
 
@@ -68,6 +71,78 @@ class Regressions(unittest.TestCase):
         self.hm.remove_service_entries('Example', ['example.com'])
         self.assertEqual(self.hosts.read_bytes(), original)
 
+    def test_reset_all_restores_original_bytes_including_foreign_routes(self):
+        original = b'# GeoHide / custom\r\n8.8.8.8 example.com other.example # Keep\n# Tail'
+        self.hosts.write_bytes(original)
+        self.hm.update_service_ip('Example', '1.1.1.1', ['example.com'])
+        self.hm.update_service_ip('Removed from catalog', '8.8.4.4', ['removed.example'])
+        self.assertTrue(self.hm.remove_all_managed_entries())
+        self.assertEqual(self.hosts.read_bytes(), original)
+        self.assertFalse(self.hm.remove_all_managed_entries())
+
+    def test_rotation_never_reapplies_current_ip_even_after_a_full_circle(self):
+        self.hm.update_service_ip('Example', '1.1.1.1', ['example.com'])
+        self.storage.config.rejected_routes['example'] = ['1.1.1.1', '8.8.4.4']
+        candidates = [CandidateIP('1.1.1.1', 'manual', 'Current'),
+                      CandidateIP('8.8.4.4', 'manual', 'Alternative')]
+        worker = VerificationWorker([self.service], self.hm, self.providers, self.storage, True, rotate=True)
+        with patch.object(self.providers, 'get_candidates', return_value=candidates), \
+             patch.object(ServiceVerifier, 'verify_candidate', side_effect=lambda ip, domain, **kw:
+                 self._result(ip, domain, ServiceStatus.OK)):
+            worker.run()
+        self.assertEqual(self.hm.parse_all_entries()['example.com'][0], '8.8.4.4')
+
+    def test_rotation_with_only_current_ip_does_not_write(self):
+        self.hm.update_service_ip('Example', '1.1.1.1', ['example.com'])
+        before = self.hosts.read_bytes()
+        results = []
+        worker = VerificationWorker([self.service], self.hm, self.providers, self.storage, True, rotate=True)
+        worker.service_result.connect(lambda sid, result, provider: results.append(result))
+        with patch.object(self.providers, 'get_candidates', return_value=[CandidateIP('1.1.1.1', 'manual', 'Same IP')]), \
+             patch.object(ServiceVerifier, 'verify_candidate') as probe:
+            worker.run()
+            probe.assert_not_called()
+        self.assertEqual(self.hosts.read_bytes(), before)
+        self.assertEqual(results[0].route_message, 'Других маршрутов нет')
+
+    def test_full_route_replacement_drops_only_stale_managed_domains(self):
+        original = self.hosts.read_bytes()
+        self.hm.update_service_ip('Example', '1.1.1.1', ['example.com', 'old.example'])
+        self.hm.update_multiple_services([dict(service_name='Example', target_ip='8.8.4.4',
+            domains=['example.com', 'api.example.com'], replace=True)])
+        self.assertNotIn('old.example', self.hm.parse_all_entries())
+        self.assertTrue(self.hosts.read_bytes().endswith(original))
+
+    def test_cloudflare_browser_challenge_is_recognized_with_http_200(self):
+        result = VerificationResult('1.1.1.1', 'example.com', ServiceStatus.PARTIAL, 1,
+            'Cloudflare challenge', 'HTTP', 200)
+        self.assertTrue(result.is_routable)
+        result.details = 'Generic access denied'
+        self.assertFalse(result.is_routable)
+
+    def test_critical_api_uses_the_available_pool_instead_of_two_dead_ips(self):
+        candidates = [CandidateIP('1.1.1.1', 'manual', 'First'), CandidateIP('8.8.4.4', 'manual', 'Second'),
+                      CandidateIP('9.9.9.9', 'manual', 'Third')]
+        worker = VerificationWorker([self.service], self.hm, self.providers, self.storage, True)
+        with patch.object(self.providers, 'get_candidates', return_value=candidates), \
+             patch.object(ServiceVerifier, 'verify_candidate', side_effect=lambda ip, domain, **kw:
+                 self._result(ip, domain, ServiceStatus.OK if ip == '9.9.9.9' else ServiceStatus.DEAD)):
+            result = worker._domain_route(('api.example.com', '/', 'API', (401,)), candidates[0], {})
+        self.assertTrue(result['ok'])
+        self.assertEqual(result['ip'], '9.9.9.9')
+
+    def test_canonical_redirect_is_checked_on_same_ip_and_geoblock_still_rejected(self):
+        for body, expected in [(b'Welcome', ServiceStatus.OK),
+                               (b'not available in your country', ServiceStatus.DEAD)]:
+            with patch('socket.socket'), patch('ssl.create_default_context') as context:
+                first, second = MagicMock(), MagicMock()
+                context.return_value.wrap_socket.side_effect = [first, second]
+                first.recv.side_effect = [b'HTTP/1.1 301 Moved\r\nLocation: https://www.example.com/app\r\nContent-Length: 0\r\n\r\n']
+                second.recv.side_effect = [b'HTTP/1.1 200 OK\r\n\r\n' + body, b'']
+                result = ServiceVerifier.verify_candidate('1.1.1.1', 'example.com')
+                self.assertEqual(result.status, expected)
+                self.assertEqual(context.return_value.wrap_socket.call_args.kwargs['server_hostname'], 'www.example.com')
+
     def test_broken_managed_marker_fails_without_deleting_data(self):
         original = b'# === DNS Switcher Managed: Broken ===\n8.8.8.8 original.example\n'
         self.hosts.write_bytes(original)
@@ -77,13 +152,13 @@ class Regressions(unittest.TestCase):
 
     def test_catalog_focus_and_stable_priority(self):
         services = Catalog().list_all()
-        self.assertEqual(len(services), 28)
+        self.assertEqual(len(services), 20)
         self.assertEqual([s.id for s in services[:4]], ['chatgpt', 'gemini', 'claude', 'elevenlabs'])
         self.assertEqual({s.id for s in Catalog().list_favorites()}, {'spotify', 'chatgpt', 'gemini', 'claude'})
         self.assertTrue({'steam', 'ea', 'battlenet', 'epicgames', 'xbox', 'playstation', 'twitter', 'youtube', 'discord', 'opencode', 'windsurf', 'disneyplus', 'paramountplus'}.isdisjoint({s.id for s in services}))
         self.assertEqual(len({s.id for s in services}), len(services))
-        self.assertEqual(sum(s.category == 'Нейросети' for s in services), 17)
-        self.assertEqual(sum(s.category == 'Музыка, видео и общение' for s in services), 11)
+        self.assertEqual(sum(s.category == 'Нейросети' for s in services), 14)
+        self.assertEqual(sum(s.category == 'Музыка, видео и общение' for s in services), 6)
 
     def test_existing_favorites_migrate_once_without_changing_routes(self):
         import json
@@ -230,7 +305,7 @@ class Regressions(unittest.TestCase):
             write.assert_not_called()
 
     def test_unsupported_streaming_and_dpi_never_rewrite_hosts(self):
-        services = [Catalog().get_service(sid) for sid in ('netflix',)]
+        services = [ServiceDef('unsupported', 'Unsupported', 'Test', 'example.org', ['example.org'], routing_mode='unverified')]
         worker = VerificationWorker(services, self.hm, self.providers, self.storage, True)
         before = self.hosts.read_bytes()
         with patch.object(ServiceVerifier, 'verify_candidate') as probe:

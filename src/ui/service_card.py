@@ -126,6 +126,10 @@ class ServiceCard(QWidget):
         controls.addWidget(hide_btn)
         controls.addWidget(reset_btn)
         self.detail_layout.addLayout(controls)
+        self.restore_dns_btn = QPushButton('Сбросить DNS сервиса')
+        self.restore_dns_btn.setToolTip('Удалить только записи DNS Switcher. Исходные строки hosts сохраняются.')
+        self.restore_dns_btn.clicked.connect(lambda: self.route_feedback.emit(service.id, 'restore_dns'))
+        self.detail_layout.addWidget(self.restore_dns_btn)
         self.detail_widget.hide()
         self.main_layout.addWidget(self.detail_widget)
         for button in self.findChildren(QPushButton) + self.findChildren(QToolButton):
@@ -169,6 +173,7 @@ class ServiceCard(QWidget):
         self.route_info = dict(status=result.status.value, latency_ms=result.latency_ms,
                                details=result.details, provider_name=current_provider,
                                suggested=getattr(result, 'suggested', False),
+                               route_message=getattr(result, 'route_message', ''),
                                confirmable=getattr(result, 'confirmable', True))
         self.result_label.setText(result.details)
         self._update_display()
@@ -195,6 +200,8 @@ class ServiceCard(QWidget):
                         'UNKNOWN': ('Не удалось проверить', '#aaaab2')}.get(status, ('', '#aaaab2'))
         if self.route_info.get('suggested'):
             label, color = 'Найден маршрут', '#79adff'
+        if self.route_info.get('route_message') and status != 'OK':
+            label = self.route_info['route_message']
         self.feedback_row.setVisible(True)
         self.next_btn.setEnabled(self.service.routing_mode == 'geo')
         self.confirm_btn.setEnabled(bool(self.current_ip) and self.service.routing_mode == 'geo')

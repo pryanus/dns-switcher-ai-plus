@@ -87,7 +87,7 @@ class TestUIHeadless(unittest.TestCase):
             self.window.tab_bar.setCurrentIndex(1)
             self.assertEqual(self.window.fix_fav_btn.text(), 'Подобрать всем')
             self.window.fix_fav_btn.click()
-            self.assertEqual({s.id for s in start.call_args.args[0]}, {s.id for s in self.catalog.list_all()})
+            self.assertEqual({s.id for s in start.call_args.args[0]}, {s.id for s in self.catalog.list_all() if not s.is_favorite})
             self.window.tab_bar.setCurrentIndex(0)
             self.assertEqual(self.window.fix_fav_btn.text(), 'Подобрать избранному')
             self.window.fix_fav_btn.click()
@@ -104,6 +104,53 @@ class TestUIHeadless(unittest.TestCase):
         self.assertEqual(card.expand_btn.text(), 'Подробнее')
         card.expand_btn.click()
         self.assertTrue(card.is_expanded)
+
+    def test_catalog_excludes_favorites_for_both_batch_actions(self):
+        from unittest.mock import patch
+        self.window.tab_bar.setCurrentIndex(1)
+        favorites = {s.id for s in self.catalog.list_favorites()}
+        self.assertTrue(favorites.isdisjoint(self.window.service_cards))
+        with patch.object(self.window, '_start_batch_worker') as start:
+            self.window.fix_fav_btn.click()
+            self.assertTrue(favorites.isdisjoint(s.id for s in start.call_args.args[0]))
+            self.window.fix_all_btn.click()
+            self.assertTrue(favorites.isdisjoint(s.id for s in start.call_args.args[0]))
+        self.window._on_favorite_toggled('chatgpt', False)
+        self.assertIn('chatgpt', self.window.service_cards)
+        self.window._on_favorite_toggled('chatgpt', True)
+        self.assertNotIn('chatgpt', self.window.service_cards)
+
+    def test_other_route_keeps_card_and_scroll_position(self):
+        from unittest.mock import patch
+        self.window.show()
+        self.app.processEvents()
+        scroll = self.window.fav_scroll.verticalScrollBar()
+        scroll.setValue(min(80, scroll.maximum()))
+        position = scroll.value()
+        card = self.window.service_cards['spotify']
+        with patch('core.monitor.VerificationWorker.start'):
+            self.window._route_feedback('spotify', 'reject')
+            self.app.processEvents()
+            self.assertIs(self.window.service_cards['spotify'], card)
+            self.assertEqual(scroll.value(), position)
+            self.window._on_worker_thread_finished()
+
+    def test_single_and_global_reset_preserve_foreign_hosts_and_other_services(self):
+        from unittest.mock import patch
+        original = self.hosts_file.read_bytes()
+        spotify, chatgpt = self.catalog.get_service('spotify'), self.catalog.get_service('chatgpt')
+        for service in (spotify, chatgpt):
+            self.hosts_mgr.update_service_ip(service.name, '1.1.1.1', service.domains)
+            self.storage.set_active_route(service.id, '1.1.1.1', 'Test', 'OK', 1)
+        self.window._route_feedback('spotify', 'restore_dns')
+        self.assertIsNone(self.storage.get_active_route('spotify'))
+        self.assertIsNotNone(self.storage.get_active_route('chatgpt'))
+        self.assertTrue(self.hosts_file.read_bytes().endswith(original))
+        dialog = SettingsDialog(self.storage, self.hosts_mgr, self.provider_mgr, self.window)
+        with patch('ui.settings_dialog.QMessageBox.information'):
+            dialog._reset_all_dns()
+        self.assertEqual(self.hosts_file.read_bytes(), original)
+        self.assertEqual(self.storage.config.active_routes, {})
 
     def test_old_route_does_not_claim_access_and_has_no_diagnostic_tooltip(self):
         from core.verifier import ServiceStatus, VerificationResult

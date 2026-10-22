@@ -10,7 +10,7 @@ import ssl
 import time
 from enum import Enum
 from typing import Dict, Optional, Tuple, List
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urljoin
 import ipaddress
 from core.validation import domain_name
 from core.network import Cancelled
@@ -60,7 +60,7 @@ class VerificationResult:
         # Cloudflare может требовать JavaScript при исправном TLS-маршруте.
         return self.status == ServiceStatus.OK or (
             self.status == ServiceStatus.PARTIAL and self.stage_reached == 'HTTP'
-            and self.http_code == 403 and 'Cloudflare challenge' in self.details
+            and self.http_code in (200, 403, 503) and 'Cloudflare challenge' in self.details
         )
 
     def __repr__(self):
@@ -81,7 +81,7 @@ class ServiceVerifier:
 
     @classmethod
     def verify_candidate(cls, ip, domain, port=443, path="/", timeout=3.0,
-                         cancellation=None, accepted_codes=()):
+                         cancellation=None, accepted_codes=(), redirects=2):
         clean_domain = domain_name(domain)
         address = ipaddress.ip_address(ip)
         if not path.startswith("/") or any(c in path for c in "\r\n "):
@@ -142,6 +142,9 @@ class ServiceVerifier:
                 response += chunk
                 if b"\r\n\r\n" in response:
                     headers, body = response.split(b"\r\n\r\n", 1)
+                    status_fields = headers.split(b'\r\n', 1)[0].split()
+                    if len(status_fields) > 1 and status_fields[1] in (b'301', b'302', b'303', b'307', b'308'):
+                        break
                     if len(body) >= 16384:
                         break
                     lengths = [line.split(b":", 1)[1].strip() for line in headers.lower().split(b"\r\n")
@@ -173,6 +176,19 @@ class ServiceVerifier:
             if code in (200, 204) or code in accepted_codes:
                 return result(ServiceStatus.OK, f"HTTPS отвечает (HTTP {code})", code)
             if code in (301, 302, 303, 307, 308):
+                headers = response.split(b'\r\n\r\n', 1)[0].split(b'\r\n')
+                location = next((line.split(b':', 1)[1].strip().decode('ascii', errors='replace')
+                                 for line in headers if line.lower().startswith(b'location:')), '')
+                target = urlparse(urljoin('https://' + clean_domain + path, location))
+                if (redirects and location and target.scheme == 'https' and target.hostname
+                        and not target.username and not target.password and target.port in (None, 443)):
+                    # Проверяем реальную цель редиректа через тот же IP и новое TLS/SNI.
+                    redirected = cls.verify_candidate(ip, target.hostname,
+                        path=(target.path or '/') + ('?' + target.query if target.query else ''),
+                        timeout=remaining(), cancellation=cancellation, redirects=redirects - 1)
+                    redirected.domain = clean_domain
+                    redirected.latency_ms = int((time.monotonic() - started) * 1000)
+                    return redirected
                 return result(ServiceStatus.PARTIAL, f"HTTP {code}: переход не подтверждает доступ к функциям", code)
             if code and code >= 500:
                 return result(ServiceStatus.DEAD, f"HTTP {code}: ошибка сервера", code)

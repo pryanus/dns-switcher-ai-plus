@@ -109,4 +109,5 @@ class ProviderManager:
                 provider.last_error = str(error)
                 return False
         results = parallel(providers, update, cancellation, timeout=6, limit=6)
+        self._recent.clear()
         return {p.id: bool(result) for p, result in zip(providers, results)}

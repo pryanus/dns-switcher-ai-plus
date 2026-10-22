@@ -20,6 +20,7 @@ class SettingsDialog(QDialog):
     db_updated = Signal()
     backup_restored = Signal()
     hosts_imported = Signal(str)
+    routes_reset = Signal()
 
     def __init__(
         self,
@@ -268,6 +269,28 @@ class SettingsDialog(QDialog):
         restore_btn.setCursor(Qt.PointingHandCursor)
         restore_btn.clicked.connect(self._on_restore_backup)
         layout.addWidget(restore_btn)
+        self.reset_all_dns_btn = QPushButton('Сбросить DNS всех сервисов', self)
+        self.reset_all_dns_btn.setToolTip('Удалить только блоки DNS Switcher. Все исходные записи hosts сохраняются.')
+        self.reset_all_dns_btn.clicked.connect(self._reset_all_dns)
+        layout.addWidget(self.reset_all_dns_btn)
+
+    def _reset_all_dns(self):
+        if not self.provider_manager.operation_lock.acquire(blocking=False):
+            QMessageBox.information(self, 'Сброс DNS', 'Дождитесь завершения проверки и повторите сброс.')
+            return
+        try:
+            self.hosts_manager.remove_all_managed_entries()
+            self.storage.config.active_routes.clear()
+            self.storage.config.rejected_routes.clear()
+            self.storage.save_config()
+        except Exception as error:
+            QMessageBox.warning(self, 'Сброс DNS', str(error))
+            return
+        finally:
+            self.provider_manager.operation_lock.release()
+        self._refresh_backups_list()
+        self.routes_reset.emit()
+        QMessageBox.information(self, 'Сброс DNS', 'Записи DNS Switcher удалены. Исходные записи hosts сохранены.')
 
     def _refresh_db_label(self) -> None:
         last = self.storage.config.last_db_update

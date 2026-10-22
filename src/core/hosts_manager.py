@@ -336,16 +336,19 @@ class HostsManager:
                 raise ValueError("Не указаны домены")
             specified = update.get('domain_ips', {})
             mappings = {domain: public_ip(specified.get(domain, target)) for domain in domains}
-            prepared.append((name, mappings))
+            prepared.append((name, mappings, update.get('replace', False)))
         content, encoding = self.read_file_safely(self.hosts_path)
         sections, original = self._split_managed(content)
-        for name, mappings in prepared:
+        for name, mappings, replace in prepared:
             # У одного домена может быть только один адрес внутри блока программы.
             for owner in sections:
                 if owner != name:
                     for domain in mappings:
                         sections[owner].pop(domain, None)
-            sections.setdefault(name, {}).update(mappings)
+            if replace:
+                sections[name] = mappings
+            else:
+                sections.setdefault(name, {}).update(mappings)
         if self.hosts_path.exists():
             self.create_backup(tag='update')
         else:
@@ -369,6 +372,19 @@ class HostsManager:
         sections.pop(service_name)
         self.create_backup(tag='remove')
         self._write_managed(sections, original, encoding)
+        return True
+
+    @locked
+    def remove_all_managed_entries(self):
+        """Сбрасывает только блоки DNS Switcher, сохраняя исходный файл побайтно."""
+        if not self.hosts_path.exists():
+            return False
+        content, encoding = self.read_file_safely(self.hosts_path)
+        sections, original = self._split_managed(content)
+        if not sections:
+            return False
+        self.create_backup(tag='reset_all')
+        self._write_managed({}, original, encoding)
         return True
 
     def parse_geohide_services(self, file_path: Optional[str] = None) -> Dict[str, Dict[str, any]]:

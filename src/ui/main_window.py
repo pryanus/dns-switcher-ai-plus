@@ -5,7 +5,7 @@ Compact dark minimalism, responsive real-time diagnostics, smooth favorites mana
 
 import webbrowser
 from typing import Dict, List, Optional
-from PySide6.QtCore import Qt, QUrl
+from PySide6.QtCore import Qt, QUrl, QTimer
 from PySide6.QtGui import QIcon, QDesktopServices
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel,
@@ -215,7 +215,7 @@ class MainWindow(QMainWindow):
         self.fix_all_btn = QPushButton("Проверить", self)
         self.fix_all_btn.setProperty("class", "secondaryBtn")
         self.fix_all_btn.setCursor(Qt.PointingHandCursor)
-        self.fix_all_btn.clicked.connect(lambda: self._start_batch_worker(self.catalog.list_favorites() if self.tab_bar.currentIndex() == 0 else self.catalog.list_all(), auto_fix=False))
+        self.fix_all_btn.clicked.connect(lambda: self._start_batch_worker(self.catalog.list_favorites() if self.tab_bar.currentIndex() == 0 else self._catalog_services(), auto_fix=False))
         footer_layout.addWidget(self.fix_all_btn)
 
         self.add_btn = QPushButton("+ Добавить", self)
@@ -256,6 +256,8 @@ class MainWindow(QMainWindow):
     def _populate_services(self) -> None:
         if not hasattr(self, 'count_label'):
             return
+        positions = [(scroll.verticalScrollBar(), scroll.verticalScrollBar().value())
+                     for scroll in (self.fav_scroll, self.all_scroll)]
         # Clear existing
         for card in self.service_cards.values():
             self.fav_layout.removeWidget(card)
@@ -265,7 +267,7 @@ class MainWindow(QMainWindow):
         self.service_cards.clear()
 
         query = self.search_edit.text()
-        all_services = self.catalog.list_favorites() if self.tab_bar.currentIndex() == 0 else self.catalog.list_all()
+        all_services = self.catalog.list_favorites() if self.tab_bar.currentIndex() == 0 else self._catalog_services()
 
         all_services = [s for s in all_services if self.tab_bar.currentIndex() == 1 or s.is_favorite]
         for s in all_services:
@@ -298,9 +300,13 @@ class MainWindow(QMainWindow):
                 self.fav_layout.insertWidget(self.fav_layout.count() - 1, card)
             else:
                 self.all_layout.insertWidget(self.all_layout.count() - 1, card)
-        self.count_label.setText(f'{len(self.catalog.list_all())} сервисов')
+        self.count_label.setText(f'{len(all_services)} сервисов')
         self.hidden_btn.setText(f'Скрытые: {len(self.catalog.hidden_services)}')
         self._filter_services(query)
+        QTimer.singleShot(0, lambda: [bar.setValue(value) for bar, value in positions])
+
+    def _catalog_services(self):
+        return [service for service in self.catalog.list_all() if not service.is_favorite]
 
     def _filter_services(self, text: str) -> None:
         category = self.category_combo.currentData() if hasattr(self, 'category_combo') else None
@@ -364,6 +370,24 @@ class MainWindow(QMainWindow):
             return
         route = self.storage.get_active_route(service_id)
         service = self.catalog.get_service(service_id)
+        if action == 'restore_dns':
+            if not self.provider_manager.operation_lock.acquire(blocking=False):
+                self.note_label.setText('Дождитесь завершения фоновой проверки и повторите сброс.')
+                return
+            try:
+                self.hosts_manager.remove_service_entries(service.name, service.domains)
+                self.storage.config.active_routes.pop(service_id, None)
+                self.storage.config.rejected_routes.pop(service_id, None)
+                self._session_results.pop(service_id, None)
+                self.storage.save_config()
+            except Exception as error:
+                QMessageBox.warning(self, 'Сброс DNS', str(error))
+                return
+            finally:
+                self.provider_manager.operation_lock.release()
+            self._populate_services()
+            self.note_label.setText('Записи программы для ' + service.name + ' удалены. Исходные записи hosts сохранены.')
+            return
         if action == 'reset':
             self.storage.config.rejected_routes.pop(service_id, None)
         elif action == 'confirm':
@@ -388,11 +412,11 @@ class MainWindow(QMainWindow):
             for ip in actual:
                 if ip not in rejected:
                     rejected.append(ip)
-            if route:
-                route.update(confirmed=False, status='DEAD', confirmable=False,
-                             details='Маршрут отклонён: нужная функция не работает.')
         self.storage.save_config()
-        self._populate_services()
+        if action == 'confirm':
+            card = self.service_cards.get(service_id)
+            if card:
+                card.set_verification_result(*self._session_results[service_id])
         if action in ('reject', 'reset'):
             self._start_batch_worker([service], auto_fix=True, rotate=True, prefer_provider_order=(action == 'reset'))
 
@@ -422,7 +446,7 @@ class MainWindow(QMainWindow):
         self._start_batch_worker(favs, auto_fix=True)
 
     def fix_all(self) -> None:
-        all_s = self.catalog.list_all()
+        all_s = self._catalog_services()
         self._start_batch_worker(all_s, auto_fix=True)
 
     def _start_batch_worker(self, services: List[ServiceDef], auto_fix: bool = False, forced=None, rotate=False, prefer_provider_order=False, silent=False) -> None:
@@ -431,6 +455,10 @@ class MainWindow(QMainWindow):
 
         if self._exiting:
             return
+        self._worker_scroll = [(scroll.verticalScrollBar(), scroll.verticalScrollBar().value())
+                               for scroll in (self.fav_scroll, self.all_scroll)]
+        # Перенос фокуса за пределы списка не даёт Qt прокрутить его к следующей кнопке.
+        self.search_edit.setFocus(Qt.OtherFocusReason)
         self.progress_widget.setVisible(True)
         self.cancel_btn.setEnabled(True)
         self.tab_bar.setEnabled(False)
@@ -458,6 +486,7 @@ class MainWindow(QMainWindow):
         self.active_worker.finished_batch.connect(self._on_worker_finished)
         self.active_worker.error_occurred.connect(self._on_worker_error)
         self.active_worker.start()
+        QTimer.singleShot(0, lambda: [bar.setValue(value) for bar, value in self._worker_scroll])
 
     def _on_worker_error(self, err_msg: str) -> None:
         QMessageBox.critical(self, "Ошибка обновления hosts", err_msg)
@@ -534,7 +563,12 @@ class MainWindow(QMainWindow):
         dlg.app_update_requested.connect(self._install_app_update)
         dlg.hosts_imported.connect(self._on_hosts_imported)
         dlg.backup_restored.connect(self._populate_services)
+        dlg.routes_reset.connect(self._on_routes_reset)
         dlg.exec()
+
+    def _on_routes_reset(self):
+        self._session_results.clear()
+        self._populate_services()
 
     def _on_hosts_imported(self, path: str) -> None:
         parsed = self.hosts_manager.parse_geohide_services(path)
