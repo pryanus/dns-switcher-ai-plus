@@ -82,19 +82,23 @@ class MalwDnsProvider(BaseProvider):
         }
 
         try:
-            with httpx.Client(timeout=timeout, verify=True, http2=True) as client:
-                resp = client.post(self.DOH_URL, content=wire_data, headers=headers)
-                if resp.status_code == 200:
-                    answer_msg = dns.message.from_wire(resp.content)
-                    ips = []
-                    for rrset in answer_msg.answer:
-                        if rrset.rdtype == dns.rdatatype.A:
-                            for item in rrset:
-                                ips.append(item.address)
-                    if ips:
-                        self._ip_cache[clean_d] = ips
-                        self._save_cache()
-                    return ips
+            try:
+                with httpx.Client(timeout=timeout, verify=True, http2=True) as client:
+                    resp = client.post(self.DOH_URL, content=wire_data, headers=headers)
+            except ImportError:
+                with httpx.Client(timeout=timeout, verify=True, http2=False) as client:
+                    resp = client.post(self.DOH_URL, content=wire_data, headers=headers)
+            if resp.status_code == 200:
+                answer_msg = dns.message.from_wire(resp.content)
+                ips = []
+                for rrset in answer_msg.answer:
+                    if rrset.rdtype == dns.rdatatype.A:
+                        for item in rrset:
+                            ips.append(item.address)
+                if ips:
+                    self._ip_cache[clean_d] = ips
+                    self._save_cache()
+                return ips
         except Exception as e:
             self.last_error = str(e)
         return []

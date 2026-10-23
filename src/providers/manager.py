@@ -23,16 +23,17 @@ class ProviderManager:
         self.cache_dir = cache_dir
         self._recent = {}
         self.discovery = {}
+        self.origin_ips: Dict[str, List[str]] = {}
         self.providers: Dict[str, BaseProvider] = {}
         self._init_default_providers()
 
     def _init_default_providers(self) -> None:
         defaults = [
             GeoHideProvider(region="RU", enabled=True, priority=20, cache_dir=self.cache_dir),
+            ZapretDnsProvider(enabled=True, priority=19, cache_dir=self.cache_dir),
             GeoHideProvider(region="EU", enabled=True, priority=18, cache_dir=self.cache_dir),
             GeoHideProvider(region="US", enabled=True, priority=16, cache_dir=self.cache_dir),
             MalwDnsProvider(enabled=True, priority=15, cache_dir=self.cache_dir),
-            ZapretDnsProvider(enabled=True, priority=14, cache_dir=self.cache_dir),
             DnsAiProvider(enabled=True, priority=13, cache_dir=self.cache_dir),
             CustomProvider('google-public-dns', 'Google Public DNS (обычный DNS)',
                            CustomProvider.TYPE_DOH, 'https://dns.google/dns-query',
@@ -91,6 +92,9 @@ class ProviderManager:
         # даже если другой резолвер вернул тот же IP и главная страница отвечает.
         origin_ips = {c.ip for p, batch in zip(sorted_providers, batches)
                       if p.id == 'google-public-dns' for c in (batch or [])}
+        clean_domain = domain.strip().lower()
+        if origin_ips:
+            self.origin_ips[clean_domain] = sorted(origin_ips)
         from datetime import datetime
         def age(provider):
             try: return max(0, (datetime.now()-datetime.fromisoformat(provider.last_updated)).total_seconds())
@@ -124,6 +128,41 @@ class ProviderManager:
                 p.last_error = str(e)
 
         return candidates
+
+    def get_direct_candidates(self, domain: str, cancellation=None) -> List[CandidateIP]:
+        """Returns native origin IPs (resolved via Google Public DNS DoH) for Direct Connection testing."""
+        clean_domain = domain.strip().lower()
+        ips = list(self.origin_ips.get(clean_domain, []))
+        if not ips:
+            google = self.providers.get('google-public-dns')
+            if google:
+                key = (google.id, clean_domain)
+                cached = self._recent.get(key)
+                if cached and time.monotonic() - cached[0] < 60:
+                    batch = cached[1]
+                else:
+                    was_enabled = google.enabled
+                    google.enabled = True
+                    try:
+                        batch = google.fetch_candidates(clean_domain)
+                    finally:
+                        google.enabled = was_enabled
+                    self._recent[key] = (time.monotonic(), batch)
+                for c in (batch or []):
+                    try:
+                        ip = public_ip(c.ip)
+                        if ip not in ips:
+                            ips.append(ip)
+                    except ValueError:
+                        continue
+                if ips:
+                    self.origin_ips[clean_domain] = ips
+        results = []
+        for ip in ips[:2]:
+            item = CandidateIP(ip, 'direct', 'Прямое подключение', 'Direct')
+            item.sources = [dict(id='direct', name='Прямое подключение')]
+            results.append(item)
+        return results
 
     def update_all_databases(self, cancellation=None) -> Dict[str, bool]:
         """Runs update for all enabled providers."""

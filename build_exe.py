@@ -37,6 +37,9 @@ def build():
         f"--icon={ICON_PATH}",
         f"--add-data={SRC_DIR / 'assets'};assets",
         f"--paths={SRC_DIR}",
+        "--collect-submodules=h2",
+        "--collect-submodules=hpack",
+        "--collect-submodules=hyperframe",
         str(MAIN_SCRIPT)
     ]
 

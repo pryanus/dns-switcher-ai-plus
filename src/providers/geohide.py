@@ -110,8 +110,11 @@ class GeoHideProvider(BaseProvider):
         if not self.enabled:
             return []
 
-        return [CandidateIP(ip, self.id, self.name, self.region)
-                for ip in self._domain_ips.get(domain.lower().strip(), [])]
+        clean_d = domain.lower().strip()
+        ips = list(self._domain_ips.get(clean_d, []))
+        if self.region == "RU" and ips and "159.194.200.33" in self.known_ips and "159.194.200.33" not in ips:
+            ips.insert(0, "159.194.200.33")
+        return [CandidateIP(ip, self.id, self.name, self.region) for ip in ips]
 
     def update_database(self) -> bool:
         """Downloads latest hosts from GeoHide GitHub and extracts supported domains/IPs."""

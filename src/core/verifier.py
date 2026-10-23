@@ -142,9 +142,19 @@ class ServiceVerifier:
                 sock.do_handshake()
             stage = "HTTP"
             sock.settimeout(remaining())
-            request = (f"GET {path} HTTP/1.1\r\nHost: {clean_domain}\r\n"
-                       "User-Agent: Mozilla/5.0\r\nAccept: */*\r\n"
-                       "Accept-Encoding: identity\r\nConnection: close\r\n\r\n")
+            request = (
+                f"GET {path} HTTP/1.1\r\n"
+                f"Host: {clean_domain}\r\n"
+                "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36\r\n"
+                "Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8\r\n"
+                "Accept-Language: en-US,en;q=0.9,ru;q=0.8\r\n"
+                "Accept-Encoding: identity\r\n"
+                "Sec-Fetch-Dest: document\r\n"
+                "Sec-Fetch-Mode: navigate\r\n"
+                "Sec-Fetch-Site: none\r\n"
+                "Upgrade-Insecure-Requests: 1\r\n"
+                "Connection: close\r\n\r\n"
+            )
             sock.sendall(request.encode('ascii'))
             response = b""
             while len(response) < 65536:
@@ -184,8 +194,9 @@ class ServiceVerifier:
             geo = (b"unsupported_country", b"country_not_supported", b"not available in your country",
                    b"not available in your region", b"not available in your location",
                    b"location is not supported", b"user location is not supported",
-                   b"/unsupported-country", b"/unsupported_country", b"/app-unavailable")
-            if any(sig in lower for sig in geo):
+                   b"/unsupported-country", b"/unsupported_country", b"/app-unavailable",
+                   b"/denied.html", b"unavailable for legal reasons")
+            if code == 451 or any(sig in lower for sig in geo):
                 return result(ServiceStatus.DEAD, "Региональный запрет (Geo-block error)", code)
             headers_lower, _, body_lower = lower.partition(b'\r\n\r\n')
             challenge_header = re.search(br'(?im)^cf-mitigated:[ \t]*challenge[ \t]*\r?$', headers_lower)

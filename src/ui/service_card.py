@@ -193,9 +193,12 @@ class ServiceCard(QWidget):
         self.fav_btn.setChecked(self.service.is_favorite)
         self.fav_btn.setStyleSheet('padding: 8px; border: none; background: transparent;')
         provider = self.route_info.get('provider_name', '')
-        self.ip_badge.setText(f"{provider or 'Из hosts'} · {self.current_ip}" if self.current_ip else 'Системный DNS')
+        if provider == 'Прямое подключение' or self.route_info.get('direct'):
+            self.ip_badge.setText('Прямое подключение · Системный DNS')
+        else:
+            self.ip_badge.setText(f"{provider or 'Из hosts'} · {self.current_ip}" if self.current_ip else 'Системный DNS')
         status = self.route_info.get('status', 'UNKNOWN')
-        label, color = {'OK': ('Маршрут отвечает', '#7acb9c'),
+        label, color = {'OK': ('Работает напрямую' if provider == 'Прямое подключение' else 'Маршрут отвечает', '#7acb9c'),
                         'PARTIAL': ('DNS применён' if self._result_applied else 'Проверка завершена', '#aaaab2'),
                         'DEAD': ('Не удалось проверить', '#aaaab2'),
                         'UNKNOWN': ('Не удалось проверить', '#aaaab2')}.get(status, ('', '#aaaab2'))

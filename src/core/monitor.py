@@ -35,11 +35,13 @@ class VerificationWorker(QThread):
         self._is_cancelled = True
         self.cancellation.cancel()
 
-    def _probe(self, ip, domain, path='/', accepted_codes=(), provider_name='current'):
+    def _probe(self, ip, domain, path='/', accepted_codes=(), provider_name='current', direct=False):
         self.cancellation.check()
         result = ServiceVerifier.verify_candidate(ip, domain, path=path, timeout=6,
             cancellation=self.cancellation, accepted_codes=accepted_codes,
-            redirect_resolver=lambda host: [c.ip for c in self.provider_manager.get_candidates(host, self.cancellation)])
+            redirect_resolver=lambda host: [c.ip for c in (
+                self.provider_manager.get_direct_candidates(host, self.cancellation) if direct
+                else self.provider_manager.get_candidates(host, self.cancellation))])
         import json
         from pathlib import Path
         from core.hosts_manager import _HOSTS_LOCK
@@ -100,7 +102,7 @@ class VerificationWorker(QThread):
         lock = Lock()
         count = [0]
         def test(c):
-            result = self._probe(c.ip, domain, path, codes, provider_name=c.provider_name)
+            result = self._probe(c.ip, domain, path, codes, provider_name=c.provider_name, direct=(c.provider_id == 'direct'))
             with lock:
                 count[0] += 1
                 self.progress.emit(0, len(self.services),
@@ -149,10 +151,15 @@ class VerificationWorker(QThread):
             self.candidates_ready.emit(sid, [row for group in self._detail_rows[sid].values() for row in group])
         return results
 
-    def _domain_route(self, check, selected, entries, current=False, required=True, service_id=None):
+    DIRECT_PREFERRED = {'camel', 'make', 'trae', 'hume', 'adobe', 'framer'}
+    DIRECT_EXCLUDED = {'gemini', 'aistudio', 'stitch', 'githubcopilot'}
+
+    def _domain_route(self, check, selected, entries, current=False, required=True, service_id=None, direct=False):
         domain, path, label, codes = check
         self.cancellation.check()
-        if current:
+        if direct:
+            candidates = self.provider_manager.get_direct_candidates(domain, self.cancellation)
+        elif current:
             candidates = [CandidateIP(ip, 'current', 'Из hosts') for ip in entries.get(domain, []) or self._resolve(domain)]
         else:
             candidates = self.provider_manager.get_candidates(domain, self.cancellation)
@@ -161,11 +168,62 @@ class VerificationWorker(QThread):
             self._domain_pools[key] = self._test_pool(candidates, domain, path, codes, service_id)
         results = self._domain_pools[key]
         good = min((x for x in results if x and x.is_routable), key=lambda x: (x.ip != selected.ip, x.latency_ms), default=None)
+        if good is None and not direct:
+            good = min((x for x in results if x and x.is_browser_challenge), key=lambda x: (x.ip != selected.ip, x.latency_ms), default=None)
         names = {c.ip: c.provider_name for c in candidates}
         last = good or next((x for x in results if x), None)
         return dict(domain=domain, label=label, ok=bool(good), ip=good.ip if good else '',
                     provider=names.get(good.ip, '') if good else '',
-                    details=last.details if last else 'Источник не поддерживает домен / не проверено', challenge=False, redirects=getattr(good, 'redirect_checks', []) if good else [])
+                    details=last.details if last else 'Источник не поддерживает домен / не проверено',
+                    challenge=bool(good and good.is_browser_challenge),
+                    redirects=getattr(good, 'redirect_checks', []) if good else [])
+
+    def _try_direct_route(self, service, checks, primary, entries, current_ip, summary):
+        if self.forced or self.rotate or service.id in self.DIRECT_EXCLUDED:
+            return False
+        direct_candidates = self.provider_manager.get_direct_candidates(primary[0], self.cancellation)
+        if not direct_candidates:
+            return False
+        direct_results = self._test_pool(direct_candidates, primary[0], primary[1], primary[3], service.id)
+        good_pair = next(((c, p) for c, p in zip(direct_candidates, direct_results) if p and p.is_routable), None)
+        if not good_pair:
+            return False
+        candidate, probe = good_pair
+        other_checks = [check for check in checks if check != primary]
+        reports = parallel(other_checks, lambda check: self._domain_route(
+            check, candidate, entries, direct=True, service_id=service.id),
+            self.cancellation, timeout=None, limit=8)
+        reports = [r or dict(domain=c[0], label=c[2], ok=False, details='Тайм-аут')
+                   for c, r in zip(other_checks, reports)]
+        if not all(r['ok'] for r in reports):
+            return False
+        reports.insert(0, dict(domain=service.primary_domain, label=primary[2], ok=True,
+            ip=candidate.ip, provider='Прямое подключение', details=probe.details,
+            challenge=False, redirects=getattr(probe, 'redirect_checks', [])))
+        if self.auto_fix:
+            self.hosts_manager.remove_service_entries(service.name, service.domains)
+        probe.ip = ''
+        probe.status = ServiceStatus.OK
+        probe.applied = self.auto_fix
+        probe.is_current = not self.auto_fix
+        probe.confirmable = True
+        probe.browser_required = False
+        probe.route_message = 'Работает напрямую'
+        probe.outcome = ('Старые записи hosts удалены → Прямое подключение'
+                         if (self.auto_fix and current_ip)
+                         else 'Прямое подключение подтверждено (записи в hosts не требуются)')
+        probe.details = '\n'.join(
+            f"{r['label']}: HTTPS доступен · Прямое подключение ({r['ip']})" for r in reports
+        ) + '\n' + account_note(service.id)
+        if self.auto_fix or not current_ip:
+            self.storage.set_active_route(service.id, '', 'Прямое подключение', 'OK', probe.latency_ms)
+            route = self.storage.get_active_route(service.id)
+            route.update(direct=True, domain_ips={}, details=probe.details,
+                         checks=reports, confirmable=True, confirmed=False)
+            self.storage.save_config()
+        self.service_result.emit(service.id, probe, 'Прямое подключение')
+        summary['fixed' if (self.auto_fix and current_ip) else 'ok'] += 1
+        return True
 
     def _check_service(self, service, summary):
         if service.routing_mode != 'geo':
@@ -229,6 +287,9 @@ class VerificationWorker(QThread):
                 self.service_result.emit(service.id, result, 'Из hosts' if current_ip else 'Системный DNS')
                 summary['failed'] += 1
                 return
+        if service.id in self.DIRECT_PREFERRED and self.auto_fix and not self.rotate and not self.forced:
+            if self._try_direct_route(service, checks, primary, entries, current_ip, summary):
+                return
         rejected = set(self.storage.config.rejected_routes.get(service.id, []))
         # Подбор всегда перебирает провайдеров: рабочая витрина не доказывает работу приложения.
         if self.forced:
@@ -265,10 +326,12 @@ class VerificationWorker(QThread):
                 status=probe.status.value if probe else 'UNKNOWN', latency_ms=probe.latency_ms if probe else 0,
                 details=probe.details if probe else 'Тайм-аут', routable=bool(probe and probe.is_routable),
                 browser_required=bool(probe and probe.is_browser_challenge)))
-            if probe and probe.is_routable:
+            if probe and (probe.is_routable or probe.is_browser_challenge):
                 viable.append((candidate, probe))
         # Работоспособность проверяем первой; задержка сортирует подходящие кандидаты.
-        if not self.prefer_provider_order:
+        if self.prefer_provider_order:
+            viable.sort(key=lambda item: (not item[1].is_routable,))
+        else:
             viable.sort(key=lambda item: (not item[1].is_routable,
                                           item[0].ip in rejected,
                                           self._provider_rank(item[0].provider_id),
@@ -280,7 +343,7 @@ class VerificationWorker(QThread):
             self.progress.emit(self.services.index(service) + 1, len(self.services),
                                service.name + ': вход, API, файлы — ' + candidate.provider_name)
             current = candidate.provider_id == 'current'
-            other_checks = [check for check in checks if check[0] != service.primary_domain]
+            other_checks = [check for check in checks if check != primary]
             reports = parallel(other_checks, lambda check: self._domain_route(check, candidate, entries, current,
                                service_id=service.id),
                                self.cancellation, timeout=None, limit=8)
@@ -295,6 +358,8 @@ class VerificationWorker(QThread):
                 break
         self.cancellation.check()
         if selected is None:
+            if self._try_direct_route(service, checks, primary, entries, current_ip, summary):
+                return
             challenges = sum(bool(probe and probe.is_browser_challenge) for probe in results)
             details = ('Других подходящих маршрутов сейчас нет. Текущий адрес сохранён.' if self.rotate else
                        'Проверенные маршруты не отвечают на нужные запросы. Текущий адрес сохранён.')
@@ -343,7 +408,7 @@ class VerificationWorker(QThread):
             extra.sort(key=lambda d: (0 if 'oaiusercontent.com' in d else
                 1 if any(part in d for part in ('cdn.', 'static', 'assets.', 'auth.', 'api.')) else 2, d))
             self.progress.emit(self.services.index(service) + 1, len(self.services), service.name + ': ресурсы и CDN')
-            extras = parallel(extra, lambda d: self._domain_route((d, '/', d, (401, 404, 302, 307)),
+            extras = parallel(extra, lambda d: self._domain_route((d, '/', d, (400, 401, 403, 404, 405, 421, 301, 302, 303, 307, 308)),
                 selected, entries, required=False, service_id=service.id), self.cancellation,
                 timeout=None, limit=8)
             for row in extras:

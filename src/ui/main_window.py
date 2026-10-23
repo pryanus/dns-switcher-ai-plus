@@ -275,7 +275,9 @@ class MainWindow(QMainWindow):
         for s in all_services:
             current_ip = (self.hosts_manager.get_service_current_ips([s.primary_domain]).get(s.primary_domain) or [None])[0]
             route_info = self.storage.get_active_route(s.id) or {}
-            if not current_ip or route_info.get('ip') != current_ip:
+            if not current_ip and route_info.get('provider_name') != 'Прямое подключение':
+                route_info = {}
+            elif current_ip and route_info.get('ip') != current_ip:
                 route_info = {}
             if current_ip and not route_info.get('provider_name'):
                 for provider in self.provider_manager.list_providers():
@@ -509,7 +511,8 @@ class MainWindow(QMainWindow):
         if getattr(result, 'alternative_failed', False):
             self.note_label.setText(f'{service.name}: другой подходящий маршрут не найден; текущий IP сохранён.')
         elif getattr(result, 'applied', False):
-            self.note_label.setText(f'{service.name}: применён {prov_name} · {result.ip}')
+            target = result.ip or 'Системный DNS (без hosts)'
+            self.note_label.setText(f'{service.name}: применён {prov_name} · {target}')
         if getattr(result, 'alternative_failed', False) and previous and previous[0].status == ServiceStatus.OK:
             card = self.service_cards.get(service_id)
             if card:

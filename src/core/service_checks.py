@@ -5,9 +5,6 @@ PROFILES = {
     'githubcopilot': [('api.individual.githubcopilot.com', '/', 'Copilot API', (401, 404, 405))],
     'groq': [('console.groq.com', '/', 'Консоль Groq', (301, 302, 303, 307, 308)),
              ('api.groq.com', '/', 'API Groq', (401, 404))],
-    'cerebras': [('cerebras.ai', '/', 'Cerebras', (301, 302, 303, 307, 308)),
-                 ('api.cerebras.ai', '/', 'API Cerebras', (401, 404))],
-    'sora': [('sora.com', '/', 'Sora', (301, 302, 303, 307, 308))],
     'chatgpt': [
         ('chatgpt.com', '/api/auth/session', 'Сессия ChatGPT', (401,)),
         ('auth.openai.com', '/', 'Вход', (302, 303, 307, 308)),
@@ -21,20 +18,33 @@ PROFILES = {
         ('generativelanguage.googleapis.com', '/v1beta/models', 'API моделей', (401,)),
     ],
     'claude': [
-        ('claude.ai', '/api/organizations', 'API аккаунта', (401,)),
+        ('claude.ai', '/login', 'Вход в Claude', (301, 302, 303, 307, 308)),
+        ('claude.ai', '/api/organizations', 'API аккаунта', (401, 403)),
+    ],
+    'antigravity': [
+        ('daily-cloudcode-pa.googleapis.com', '/', 'Cloud Code API', (401, 403, 404)),
+        ('antigravity.google', '/', 'Портал Antigravity', (301, 302, 303, 307, 308)),
+    ],
+    'grok': [
+        ('grok.com', '/', 'Приложение Grok', (301, 302, 303, 307, 308)),
+        ('accounts.x.ai', '/sign-in', 'Вход xAI', (301, 302, 303, 307, 308)),
     ],
     'spotify': [
         ('open.spotify.com', '/', 'Веб-плеер', (302, 307)),
         ('accounts.spotify.com', '/login', 'Вход', (302, 303, 307)),
         ('spclient.wg.spotify.com', '/', 'Воспроизведение', (401, 404)),
     ],
-    'elevenlabs': [
-        ('elevenlabs.io', '/app', 'Приложение', (302, 307)),
-        ('api.elevenlabs.io', '/v1/user', 'API аккаунта', (401,)),
-    ],
     'aistudio': [
-        ('aistudio.google.com', '/', 'Приложение', (302, 303, 307)),
-        ('generativelanguage.googleapis.com', '/v1beta/models', 'API моделей', (401,)),
+        ('aistudio.google.com', '/', 'AI Studio', (301, 302, 303, 307, 308)),
+    ],
+    'deepl': [
+        ('www.deepl.com', '/', 'Переводчик DeepL', (301, 302, 303, 307, 308)),
+    ],
+    'make': [
+        ('www.make.com', '/en', 'Платформа Make', (301, 302, 303, 307, 308)),
+    ],
+    'adobe': [
+        ('www.adobe.io', '/', 'Сервисы Adobe', (301, 302, 303, 307, 308)),
     ],
 }
 

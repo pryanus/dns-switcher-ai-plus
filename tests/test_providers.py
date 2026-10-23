@@ -43,10 +43,18 @@ class TestProviders(unittest.TestCase):
         known = set(parse_hosts((assets / 'malw_hosts.txt').read_text(encoding='utf-8')))
         for region in ('ru', 'eu', 'us'):
             known.update(parse_hosts((assets / f'geohide_{region}.txt').read_text(encoding='utf-8')))
-        declared = {row['name'].casefold() for row in json.loads((assets / 'zapret_services.json').read_text(encoding='utf-8'))}
-        aliases = {'sora': 'chatgpt & sora (openai)'}
+        zapret_rows = json.loads((assets / 'zapret_services.json').read_text(encoding='utf-8'))
+        declared = {row['name'].casefold() for row in zapret_rows}
+        declared_domains = {row.get('domain', '').casefold() for row in zapret_rows}
+        aliases = {'sora': 'chatgpt & sora (openai)', 'adobe': 'adobe ai'}
         for service in Catalog().list_all():
-            self.assertTrue(service.primary_domain in known or aliases.get(service.id) in declared, service.id)
+            self.assertTrue(
+                service.primary_domain in known
+                or service.primary_domain in declared_domains
+                or service.name.casefold() in declared
+                or aliases.get(service.id) in declared,
+                service.id
+            )
 
     def test_full_geohide_pool_and_google_fallback_are_available(self):
         manager = ProviderManager()

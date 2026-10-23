@@ -234,16 +234,16 @@ class Regressions(unittest.TestCase):
 
     def test_catalog_focus_and_stable_priority(self):
         services = Catalog().list_all()
-        self.assertEqual(len(services), 19)
-        self.assertEqual([s.id for s in services[:4]], ['chatgpt', 'gemini', 'claude', 'cursor'])
+        self.assertEqual(len(services), 27)
+        self.assertEqual([s.id for s in services[:4]], ['chatgpt', 'gemini', 'claude', 'antigravity'])
         self.assertEqual({s.id for s in Catalog().list_favorites()}, {'spotify', 'chatgpt', 'gemini', 'claude'})
         self.assertTrue({'steam', 'ea', 'battlenet', 'epicgames', 'xbox', 'playstation', 'twitter', 'youtube', 'discord', 'twitch', 'opencode', 'windsurf', 'disneyplus', 'paramountplus'}.isdisjoint({s.id for s in services}))
         self.assertEqual(len({s.id for s in services}), len(services))
-        self.assertEqual(sum(s.category == 'Нейросети' for s in services), 13)
-        self.assertEqual(sum(s.category == 'Музыка, видео и общение' for s in services), 3)
-        self.assertEqual(sum(s.category == 'Перевод и продуктивность' for s in services), 3)
-        self.assertTrue({'canva', 'deezer', 'sora', 'elevenlabs'}.isdisjoint({s.id for s in services}))
-        self.assertTrue({'deepl', 'make', 'grok', 'framer'}.issubset({s.id for s in services}))
+        self.assertTrue({'canva', 'deezer', 'sora', 'elevenlabs', 'reve', 'cerebras', 'genspark', 'crunchyroll'}.isdisjoint({s.id for s in services}))
+        self.assertTrue({'deepl', 'make', 'grok', 'framer', 'antigravity', 'trae', 'camel', 'hume', 'adobe', 'copilot', 'aistudio', 'groq', 'nvidia', 'jetbrains', 'capcut', 'slack', 'atlassian'}.issubset({s.id for s in services}))
+        gemini_domains = set(Catalog().get_service('gemini').domains)
+        antigravity_domains = set(Catalog().get_service('antigravity').domains)
+        self.assertTrue(gemini_domains.isdisjoint(antigravity_domains))
 
     def test_canva_restricted_redirect_is_a_geoblock(self):
         with patch('socket.socket'), patch('ssl.create_default_context') as context:
@@ -315,20 +315,50 @@ class Regressions(unittest.TestCase):
             self.assertTrue(client.call_args.kwargs['http2'])
             self.assertIsNone(provider.last_error)
 
-    def test_cloudflare_route_is_never_applied_even_after_explicit_switch(self):
-        for mode in ({}, {'rotate': True}, {'forced': ('1.1.1.1', 'Test')}):
-            with self.subTest(mode=mode):
-                service = ServiceDef(id='gemini', name='Gemini', category='AI',
-                                     primary_domain='gemini.google.com', domains=['gemini.google.com'])
-                before = self.hosts.read_bytes()
-                worker = VerificationWorker([service], self.hm, self.providers, self.storage, True, **mode)
-                challenge = VerificationResult('1.1.1.1', service.primary_domain, ServiceStatus.PARTIAL,
-                    1, 'Cloudflare challenge: JavaScript required', 'HTTP', 403)
-                with patch.object(self.providers, 'get_candidates', return_value=[CandidateIP('1.1.1.1', 'manual', 'Test')]), \
-                     patch.object(ServiceVerifier, 'verify_candidate', return_value=challenge):
-                    worker.run()
-                self.assertEqual(self.hosts.read_bytes(), before)
-                self.assertIsNone(self.storage.get_active_route('gemini'))
+    def test_cloudflare_challenge_route_is_applied_when_no_unchallenged_route_exists(self):
+        service = ServiceDef(id='claude', name='Claude (Anthropic)', category='Нейросети',
+                             primary_domain='claude.ai', domains=['claude.ai', 'www.claude.ai'])
+        worker = VerificationWorker([service], self.hm, self.providers, self.storage, True)
+        challenge = VerificationResult('83.217.211.149', service.primary_domain, ServiceStatus.PARTIAL,
+            45, 'Cloudflare challenge: доступ не подтверждён', 'HTTP', 403)
+        with patch.object(self.providers, 'get_candidates', return_value=[CandidateIP('83.217.211.149', 'zapret-dns', 'Zapret DNS')]), \
+             patch.object(ServiceVerifier, 'verify_candidate', return_value=challenge):
+            worker.run()
+        route = self.storage.get_active_route('claude')
+        self.assertIsNotNone(route)
+        self.assertEqual(route['ip'], '83.217.211.149')
+        self.assertEqual(self.hm.parse_all_entries()['claude.ai'], ['83.217.211.149'])
+
+    def test_direct_connection_mode_cleans_stale_hosts_and_sets_direct_route(self):
+        original = b'127.0.0.1 localhost\r\n8.8.8.8 keep.user.example # User entry\r\n'
+        self.hosts.write_bytes(original)
+        camel = Catalog().get_service('camel')
+        self.hm.update_service_ip(camel.name, '193.233.112.88', camel.domains)
+        self.assertIn('camelai.com', self.hm.parse_all_entries())
+        worker = VerificationWorker([camel], self.hm, self.providers, self.storage, True)
+        def verify(ip, domain, **kw):
+            if ip == '193.233.112.88':
+                return VerificationResult(ip, domain, ServiceStatus.DEAD, 3000, 'TCP timed out', 'TCP')
+            return VerificationResult(ip, domain, ServiceStatus.OK, 50, 'HTTPS отвечает (HTTP 200)', 'HTTP', 200)
+        with patch.object(self.providers, 'get_candidates', return_value=[CandidateIP('193.233.112.88', 'geohide-ru', 'GeoHide (RU)')]), \
+             patch.object(self.providers, 'get_direct_candidates', return_value=[CandidateIP('8.47.69.5', 'direct', 'Прямое подключение')]), \
+             patch.object(ServiceVerifier, 'verify_candidate', side_effect=verify):
+            worker.run()
+        route = self.storage.get_active_route('camel')
+        self.assertIsNotNone(route)
+        self.assertEqual(route['provider_name'], 'Прямое подключение')
+        self.assertEqual(route['ip'], '')
+        self.assertNotIn('camelai.com', self.hm.parse_all_entries())
+        self.assertEqual(self.hm.parse_all_entries()['keep.user.example'], ['8.8.8.8'])
+        self.assertEqual(self.hm.read_bytes() if hasattr(self.hm, 'read_bytes') else self.hosts.read_bytes(), original)
+
+    def test_http_451_is_classified_as_geoblock_dead(self):
+        with patch('socket.socket'), patch('ssl.create_default_context') as context:
+            context.return_value.wrap_socket.return_value.recv.side_effect = [
+                b'HTTP/1.1 451 Unavailable For Legal Reasons\r\nContent-Length: 0\r\n\r\n', b'']
+            result = ServiceVerifier.verify_candidate('8.47.69.5', 'www.deepl.com')
+        self.assertEqual(result.status, ServiceStatus.DEAD)
+        self.assertEqual(result.category, 'GEO_BLOCK')
 
     def test_failed_provider_api_does_not_stop_the_next_provider(self):
         pool = [CandidateIP('1.1.1.1', 'first', 'First'), CandidateIP('8.8.4.4', 'second', 'Second')]

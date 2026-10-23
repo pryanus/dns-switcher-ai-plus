@@ -145,16 +145,20 @@ class CustomProvider(BaseProvider):
             "Accept": "application/dns-message",
         }
         try:
-            with httpx.Client(timeout=3.5, verify=True, http2=True) as client:
-                resp = client.post(self.endpoint_or_ip, content=query.to_wire(), headers=headers)
-                if resp.status_code == 200:
-                    answer_msg = dns.message.from_wire(resp.content)
-                    ips = []
-                    for rrset in answer_msg.answer:
-                        if rrset.rdtype == dns.rdatatype.A:
-                            for item in rrset:
-                                ips.append(item.address)
-                    return ips
+            try:
+                with httpx.Client(timeout=3.5, verify=True, http2=True) as client:
+                    resp = client.post(self.endpoint_or_ip, content=query.to_wire(), headers=headers)
+            except ImportError:
+                with httpx.Client(timeout=3.5, verify=True, http2=False) as client:
+                    resp = client.post(self.endpoint_or_ip, content=query.to_wire(), headers=headers)
+            if resp.status_code == 200:
+                answer_msg = dns.message.from_wire(resp.content)
+                ips = []
+                for rrset in answer_msg.answer:
+                    if rrset.rdtype == dns.rdatatype.A:
+                        for item in rrset:
+                            ips.append(item.address)
+                return ips
         except Exception as e:
             self.last_error = str(e)
         return []

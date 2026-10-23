@@ -482,10 +482,19 @@ class HostsManager:
             # Line with IP and domains
             parts = trimmed.partition("#")[0].split()
             if len(parts) >= 2:
-                ip = parts[0]
-                domains = [domain_name(d) for d in parts[1:]]
-                current_ips.add(ip)
-                current_domains.update(domains)
+                try:
+                    ip = public_ip(parts[0])
+                except ValueError:
+                    continue
+                domains = []
+                for d in parts[1:]:
+                    try:
+                        domains.append(domain_name(d))
+                    except (ValueError, UnicodeError):
+                        continue
+                if domains:
+                    current_ips.add(ip)
+                    current_domains.update(domains)
 
         # Append last group
         if current_domains and current_service:
