@@ -18,6 +18,8 @@ from providers.custom import CustomProvider
 
 
 class ProviderManager:
+    PUBLIC_DNS_IDS = {'google-public-dns', 'cloudflare-dns', 'quad9-dns'}
+
     def __init__(self, cache_dir: Optional[str] = None):
         self.operation_lock = RLock()
         self.cache_dir = cache_dir
@@ -35,7 +37,13 @@ class ProviderManager:
             GeoHideProvider(region="US", enabled=True, priority=16, cache_dir=self.cache_dir),
             MalwDnsProvider(enabled=True, priority=15, cache_dir=self.cache_dir),
             DnsAiProvider(enabled=True, priority=13, cache_dir=self.cache_dir),
-            CustomProvider('google-public-dns', 'Google Public DNS (обычный DNS)',
+            CustomProvider('cloudflare-dns', 'Cloudflare DNS (1.1.1.1 / 1.0.0.1 DoH)',
+                           CustomProvider.TYPE_DOH, 'https://cloudflare-dns.com/dns-query',
+                           enabled=True, priority=3, cache_dir=self.cache_dir),
+            CustomProvider('quad9-dns', 'Quad9 DNS (9.9.9.9 DoH)',
+                           CustomProvider.TYPE_DOH, 'https://dns.quad9.net/dns-query',
+                           enabled=True, priority=2, cache_dir=self.cache_dir),
+            CustomProvider('google-public-dns', 'Google Public DNS (8.8.8.8 DoH)',
                            CustomProvider.TYPE_DOH, 'https://dns.google/dns-query',
                            enabled=True, priority=1, cache_dir=self.cache_dir),
         ]
@@ -91,7 +99,7 @@ class ProviderManager:
         # Обычный DNS нужен для сравнения. Его нативные адреса не являются GEO-прокси,
         # даже если другой резолвер вернул тот же IP и главная страница отвечает.
         origin_ips = {c.ip for p, batch in zip(sorted_providers, batches)
-                      if p.id == 'google-public-dns' for c in (batch or [])}
+                      if p.id in self.PUBLIC_DNS_IDS for c in (batch or [])}
         clean_domain = domain.strip().lower()
         if origin_ips:
             self.origin_ips[clean_domain] = sorted(origin_ips)
@@ -102,7 +110,7 @@ class ProviderManager:
         self.discovery[domain] = [dict(provider=p.name, ips=[c.ip for c in (batch or [])],
             cache_age_seconds=age(p), stale=age(p) is None or age(p) > 86400,
             state='SKIPPED' if batch is None else 'FOUND' if batch else 'SOURCE_ERROR' if p.last_error else 'UNSUPPORTED',
-            excluded_ips=[c.ip for c in (batch or []) if p.id == 'google-public-dns' or c.ip in origin_ips],
+            excluded_ips=[c.ip for c in (batch or []) if p.id in self.PUBLIC_DNS_IDS or c.ip in origin_ips],
             filter_reason='Нативный DNS-ответ не подтверждает поддержку обхода',
             error=p.last_error, last_updated=p.last_updated) for p, batch in zip(sorted_providers, batches)]
         by_ip = {}
@@ -114,7 +122,7 @@ class ProviderManager:
                         c.ip = public_ip(c.ip)
                     except ValueError:
                         continue
-                    if p.id == 'google-public-dns' or c.ip in origin_ips:
+                    if p.id in self.PUBLIC_DNS_IDS or c.ip in origin_ips:
                         continue
                     if c.ip not in seen_ips:
                         seen_ips.add(c.ip)
@@ -130,23 +138,25 @@ class ProviderManager:
         return candidates
 
     def get_direct_candidates(self, domain: str, cancellation=None) -> List[CandidateIP]:
-        """Returns native origin IPs (resolved via Google Public DNS DoH) for Direct Connection testing."""
+        """Returns native origin IPs (resolved via Cloudflare / Quad9 / Google DoH) for Direct Connection testing."""
         clean_domain = domain.strip().lower()
         ips = list(self.origin_ips.get(clean_domain, []))
         if not ips:
-            google = self.providers.get('google-public-dns')
-            if google:
-                key = (google.id, clean_domain)
+            for pid in ('cloudflare-dns', 'quad9-dns', 'google-public-dns'):
+                resolver = self.providers.get(pid)
+                if not resolver:
+                    continue
+                key = (resolver.id, clean_domain)
                 cached = self._recent.get(key)
                 if cached and time.monotonic() - cached[0] < 60:
                     batch = cached[1]
                 else:
-                    was_enabled = google.enabled
-                    google.enabled = True
+                    was_enabled = resolver.enabled
+                    resolver.enabled = True
                     try:
-                        batch = google.fetch_candidates(clean_domain)
+                        batch = resolver.fetch_candidates(clean_domain)
                     finally:
-                        google.enabled = was_enabled
+                        resolver.enabled = was_enabled
                     self._recent[key] = (time.monotonic(), batch)
                 for c in (batch or []):
                     try:
@@ -157,6 +167,7 @@ class ProviderManager:
                         continue
                 if ips:
                     self.origin_ips[clean_domain] = ips
+                    break
         results = []
         for ip in ips[:2]:
             item = CandidateIP(ip, 'direct', 'Прямое подключение', 'Direct')

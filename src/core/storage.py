@@ -28,7 +28,7 @@ class AppConfig:
         custom_services: Optional[List[Dict]] = None,
         custom_providers: Optional[List[Dict]] = None,
         active_routes: Optional[Dict[str, Dict]] = None,
-        catalog_revision: int = 7,
+        catalog_revision: int = 8,
         hidden_services=None,
         rejected_routes=None
     ):
@@ -44,6 +44,8 @@ class AppConfig:
             "malw-dns": True,
             "zapret-dns": True,
             "dns-ai": True,
+            "cloudflare-dns": True,
+            "quad9-dns": True,
             "google-public-dns": True
         }
         self.auto_update_db = auto_update_db
@@ -156,7 +158,11 @@ class StorageManager:
             self.config.providers_enabled.setdefault('dns-ai', True)
             self.config.providers_enabled.setdefault('google-public-dns', True)
             self.config.rejected_routes.clear()
-            self.config.catalog_revision = 7
+        if self.config.catalog_revision < 8:
+            self.config.providers_enabled.setdefault('cloudflare-dns', True)
+            self.config.providers_enabled.setdefault('quad9-dns', True)
+            self.config.providers_enabled.setdefault('google-public-dns', True)
+            self.config.catalog_revision = 8
             self.save_config()
 
     def load_config(self) -> AppConfig:
