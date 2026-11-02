@@ -16,7 +16,7 @@ import httpx
 from PySide6.QtCore import QThread, Signal
 from core.network import Cancellation, Cancelled
 
-VERSION = '1.1.2'
+VERSION = '1.1.3'
 REPOSITORY = 'pryanus/dns-switcher-ai-plus'
 ASSET_NAME = 'DNS_Switcher_AI_Plus.exe'
 API_URL = f'https://api.github.com/repos/{REPOSITORY}/releases/latest'
@@ -167,17 +167,20 @@ try {{
   finally {{ $hasher.Dispose() }};
   if ($actual -ne {quote(digest)}) {{ throw 'SHA-256 mismatch' }};
   Wait-Process -Id {int(process_id)} -Timeout 60 -ErrorAction SilentlyContinue;
-  if (Get-Process -Id {int(process_id)} -ErrorAction SilentlyContinue) {{ throw 'Application is still running' }};
-  for ($attempt=0; $attempt -lt 30; $attempt++) {{
-    try {{ [System.IO.File]::Replace($stage,$target,$backup); $installed=$true; break }}
-    catch {{ Start-Sleep -Milliseconds 500 }}
+  Start-Sleep -Seconds 2;
+  for ($attempt=0; $attempt -lt 60 -and -not $installed; $attempt++) {{
+    try {{ [System.IO.File]::Replace($stage,$target,$backup); $installed=$true }}
+    catch {{
+      try {{ Move-Item -LiteralPath $target -Destination $backup -Force; Move-Item -LiteralPath $stage -Destination $target -Force; $installed=$true }}
+      catch {{ $lastError=$_.Exception.Message; if ((-not (Test-Path -LiteralPath $target)) -and (Test-Path -LiteralPath $backup)) {{ Move-Item -LiteralPath $backup -Destination $target -Force }}; Start-Sleep -Milliseconds 500 }}
+    }}
   }};
-  if (-not $installed) {{ throw 'Executable is still locked' }};
+  if (-not $installed) {{ throw ('Executable is still locked: ' + $lastError) }};
   if ({args}.Length -gt 0) {{ Start-Process -FilePath $target -ArgumentList {args} -WindowStyle Normal }}
   else {{ Start-Process -FilePath $target -WindowStyle Normal }};
 }} catch {{
   Add-Type -AssemblyName System.Windows.Forms;
-  [System.Windows.Forms.MessageBox]::Show('Не удалось установить обновление. Предыдущий EXE сохранён. Запустите программу вручную.','DNS Switcher AI+');
+  [System.Windows.Forms.MessageBox]::Show('Не удалось установить обновление. Предыдущий EXE сохранён. Запустите программу вручную.' + [Environment]::NewLine + $_.Exception.Message,'DNS Switcher AI+');
 }} finally {{
   if (Test-Path -LiteralPath $stage) {{ Remove-Item -LiteralPath $stage -Force }};
   Remove-Item -LiteralPath $source -Force -ErrorAction SilentlyContinue;
