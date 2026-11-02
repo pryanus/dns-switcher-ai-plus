@@ -151,7 +151,7 @@ class VerificationWorker(QThread):
             self.candidates_ready.emit(sid, [row for group in self._detail_rows[sid].values() for row in group])
         return results
 
-    DIRECT_PREFERRED = {'camel', 'make', 'trae', 'hume', 'adobe', 'framer'}
+    DIRECT_PREFERRED = {'camel', 'make', 'trae', 'hume', 'adobe', 'framer', 'imgur'}
     DIRECT_EXCLUDED = {'gemini', 'aistudio', 'stitch', 'githubcopilot'}
 
     def _domain_route(self, check, selected, entries, current=False, required=True, service_id=None, direct=False):
@@ -304,6 +304,13 @@ class VerificationWorker(QThread):
                           for ip in (resolved or [])]
         else:
             candidates = self.provider_manager.get_candidates(service.primary_domain, self.cancellation)
+            if not candidates:
+                for d in service.domains:
+                    if d != service.primary_domain:
+                        extra_cands = self.provider_manager.get_candidates(d, self.cancellation)
+                        if extra_cands:
+                            candidates = extra_cands
+                            break
         pool = candidates
         candidates = pool if self.forced else [c for c in pool if c.ip not in rejected]
         if pool and not candidates and self.auto_fix and not self.forced:
