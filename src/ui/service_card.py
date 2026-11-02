@@ -51,6 +51,12 @@ class ServiceCard(QWidget):
         self.fav_btn.setAccessibleName('Добавить в избранное')
         self.fav_btn.setToolTip('Добавить или убрать из избранного')
         self.fav_btn.clicked.connect(self._on_fav_clicked)
+        self.quick_hide_btn = QToolButton()
+        self.quick_hide_btn.setText('Скрыть')
+        self.quick_hide_btn.setToolTip('Убрать сервис из каталога (вернуть можно в меню скрытых)')
+        self.quick_hide_btn.setStyleSheet('QToolButton { font-size: 13px; color: #8e8e98; padding: 4px 8px; border: none; background: transparent; } QToolButton:hover { color: #d0d0d8; }')
+        self.quick_hide_btn.clicked.connect(lambda: self.hide_requested.emit(service.id))
+        top.addWidget(self.quick_hide_btn)
         top.addWidget(self.fav_btn)
         self.main_layout.addLayout(top)
 

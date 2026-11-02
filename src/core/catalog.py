@@ -118,6 +118,9 @@ BUILTIN_SERVICES: List[ServiceDef] = [
     ServiceDef.from_dict({'id': 'framer', 'name': 'Framer', 'primary_domain': 'www.framer.com', 'domains': ['framer.com', 'www.framer.com'], 'category': 'Перевод и продуктивность', 'description': 'Платформа веб-дизайна Framer. Поддерживает прямое подключение и Smart DNS.'}),
     ServiceDef.from_dict({'id': 'slack', 'name': 'Slack', 'primary_domain': 'slack.com', 'domains': ['slack-edge.com', 'slack-files.com', 'slack-imgs.com', 'slack.com', 'www.slack.com'], 'category': 'Музыка, видео и общение', 'description': 'Корпоративный мессенджер Slack.'}),
     ServiceDef.from_dict({'id': 'atlassian', 'name': 'Atlassian (Jira / Trello)', 'primary_domain': 'www.atlassian.com', 'domains': ['atlassian.com', 'www.atlassian.com'], 'category': 'Перевод и продуктивность', 'description': 'Сервисы совместной работы Jira, Confluence и Trello.'}),
+    ServiceDef.from_dict({'id': 'xbox-pc', 'name': 'Xbox (PC / Game Pass)', 'category': 'Игры', 'primary_domain': 'xsts.auth.xboxlive.com', 'domains': ['account.xboxlive.com', 'auth.xboxlive.com', 'device.auth.xboxlive.com', 'gssv-play-prod.xboxlive.com', 'profile.xboxlive.com', 'sisu.xboxlive.com', 'title.auth.xboxlive.com', 'titlestorage.xboxlive.com', 'user.auth.xboxlive.com', 'xgpuweb.gssv-play-prod.xboxlive.com', 'xgpuwebf2p.gssv-play-prod.xboxlive.com', 'xsts.auth.xboxlive.com'], 'test_path': '/xsts/authorize', 'is_favorite': False, 'is_custom': False, 'description': 'Вход в Xbox Live и Game Pass на ПК.', 'routing_mode': 'geo'}),
+    ServiceDef.from_dict({'id': 'imgur', 'name': 'Imgur', 'category': 'Музыка, видео и общение', 'primary_domain': 'api.imgur.com', 'domains': ['api.imgur.com', 'apidocs.imgur.com', 'i.imgur.com', 'imgur.com', 's.imgur.com', 'www.imgur.com'], 'test_path': '/3/credits', 'is_favorite': False, 'is_custom': False, 'description': 'Хостинг изображений Imgur.', 'routing_mode': 'geo'}),
+    ServiceDef.from_dict({'id': 'amd', 'name': 'AMD', 'category': 'Перевод и продуктивность', 'primary_domain': 'www.amd.com', 'domains': ['amd.com', 'drivers.amd.com', 'www.amd.com'], 'test_path': '/', 'is_favorite': False, 'is_custom': False, 'description': 'Сайт и драйверы AMD.', 'routing_mode': 'geo'}),
 ]
 
 _DEFAULT_FAVORITES = ["spotify", "chatgpt", "gemini", "claude"]
@@ -149,6 +152,9 @@ _RANK = {
     'framer': 24,
     'slack': 25,
     'atlassian': 26,
+    'xbox-pc': 27,
+    'imgur': 28,
+    'amd': 29,
 }
 
 class Catalog:
@@ -162,7 +168,10 @@ class Catalog:
 
         # Load custom
         if custom_services:
+            builtin_ids = {b.id for b in BUILTIN_SERVICES}
             for s in custom_services:
+                if s.id in builtin_ids:
+                    continue
                 self._services[s.id] = ServiceDef.from_dict(s.to_dict())
 
     def get_service(self, service_id: str) -> Optional[ServiceDef]:

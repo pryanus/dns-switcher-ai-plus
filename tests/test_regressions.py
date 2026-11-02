@@ -234,7 +234,7 @@ class Regressions(unittest.TestCase):
 
     def test_catalog_focus_and_stable_priority(self):
         services = Catalog().list_all()
-        self.assertEqual(len(services), 27)
+        self.assertEqual(len(services), 30)
         self.assertEqual([s.id for s in services[:4]], ['chatgpt', 'gemini', 'claude', 'antigravity'])
         self.assertEqual({s.id for s in Catalog().list_favorites()}, {'spotify', 'chatgpt', 'gemini', 'claude'})
         self.assertTrue({'steam', 'ea', 'battlenet', 'epicgames', 'xbox', 'playstation', 'twitter', 'youtube', 'discord', 'twitch', 'opencode', 'windsurf', 'disneyplus', 'paramountplus'}.isdisjoint({s.id for s in services}))

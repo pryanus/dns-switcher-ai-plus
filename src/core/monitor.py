@@ -167,7 +167,8 @@ class VerificationWorker(QThread):
         if key not in self._domain_pools:
             self._domain_pools[key] = self._test_pool(candidates, domain, path, codes, service_id)
         results = self._domain_pools[key]
-        good = min((x for x in results if x and x.is_routable), key=lambda x: (x.ip != selected.ip, x.latency_ms), default=None)
+        old_ip = (entries.get(domain) or [''])[0] if self.rotate else ''
+        good = min((x for x in results if x and x.is_routable), key=lambda x: (x.ip != selected.ip, bool(old_ip and x.ip == old_ip), x.latency_ms), default=None)
         if good is None and not direct:
             good = min((x for x in results if x and x.is_browser_challenge), key=lambda x: (x.ip != selected.ip, x.latency_ms), default=None)
         names = {c.ip: c.provider_name for c in candidates}

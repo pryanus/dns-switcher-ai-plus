@@ -413,7 +413,7 @@ class MainWindow(QMainWindow):
         elif action == 'reject':
             actual = self.hosts_manager.get_service_current_ips([service.primary_domain]).get(service.primary_domain, [])
             rejected = self.storage.config.rejected_routes.setdefault(service_id, [])
-            for ip in actual[:1]:
+            for ip in (actual[:1] or ([route.get('ip')] if route and route.get('ip') else [])):
                 if ip not in rejected:
                     rejected.append(ip)
         self.storage.save_config()

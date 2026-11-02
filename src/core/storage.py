@@ -28,7 +28,7 @@ class AppConfig:
         custom_services: Optional[List[Dict]] = None,
         custom_providers: Optional[List[Dict]] = None,
         active_routes: Optional[Dict[str, Dict]] = None,
-        catalog_revision: int = 8,
+        catalog_revision: int = 9,
         hidden_services=None,
         rejected_routes=None
     ):
@@ -39,8 +39,8 @@ class AppConfig:
         self.favorites = list(favorites) if favorites is not None else ["spotify", "chatgpt", "gemini", "claude"]
         self.providers_enabled = providers_enabled or {
             "geohide-ru": True,
-            "geohide-eu": False,
-            "geohide-us": False,
+            "geohide-eu": True,
+            "geohide-us": True,
             "malw-dns": True,
             "zapret-dns": True,
             "dns-ai": True,
@@ -123,6 +123,7 @@ class StorageManager:
         self.data_dir.mkdir(parents=True, exist_ok=True)
         self.config_path = self.data_dir / "config.json"
         self.config: AppConfig = self.load_config()
+        original_revision = self.config.catalog_revision
         if self.config.catalog_revision < 3:
             self.config.favorites = ["spotify", "chatgpt", "gemini", "claude"]
             self.config.theme = "dark"
@@ -163,6 +164,12 @@ class StorageManager:
             self.config.providers_enabled.setdefault('quad9-dns', True)
             self.config.providers_enabled.setdefault('google-public-dns', True)
             self.config.catalog_revision = 8
+            self.save_config()
+        if self.config.catalog_revision < 9:
+            if original_revision in (7, 8):
+                self.config.providers_enabled['geohide-eu'] = True
+                self.config.providers_enabled['geohide-us'] = True
+            self.config.catalog_revision = 9
             self.save_config()
 
     def load_config(self) -> AppConfig:
