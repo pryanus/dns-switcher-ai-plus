@@ -7,6 +7,8 @@ PROFILES = {
              ('api.groq.com', '/', 'API Groq', (401, 404))],
     'chatgpt': [
         ('chatgpt.com', '/api/auth/session', 'Сессия ChatGPT', (401,)),
+        ('api.openai.com', '/', 'API OpenAI / Codex', (400, 401, 404, 405, 421)),
+        ('platform.openai.com', '/', 'Платформа OpenAI', (301, 302, 307, 308, 401)),
         ('auth.openai.com', '/', 'Вход', (302, 303, 307, 308)),
         ('cdn.oaistatic.com', '/', 'Ресурсы интерфейса', (404,)),
         ('files.oaiusercontent.com', '/', 'Файлы и вложения', (404,)),
