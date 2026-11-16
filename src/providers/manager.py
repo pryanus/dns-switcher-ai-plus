@@ -11,7 +11,7 @@ from core.validation import public_ip
 
 from providers.base import BaseProvider, CandidateIP
 from providers.geohide import GeoHideProvider
-from providers.zapret import ZapretDnsProvider
+from providers.geodema import GeodemaDnsProvider
 from providers.malw import MalwDnsProvider
 from providers.dns_ai import DnsAiProvider
 from providers.custom import CustomProvider
@@ -32,7 +32,7 @@ class ProviderManager:
     def _init_default_providers(self) -> None:
         defaults = [
             GeoHideProvider(region="RU", enabled=True, priority=20, cache_dir=self.cache_dir),
-            ZapretDnsProvider(enabled=True, priority=19, cache_dir=self.cache_dir),
+            GeodemaDnsProvider(enabled=True, priority=19, cache_dir=self.cache_dir),
             GeoHideProvider(region="EU", enabled=True, priority=18, cache_dir=self.cache_dir),
             GeoHideProvider(region="US", enabled=True, priority=16, cache_dir=self.cache_dir),
             MalwDnsProvider(enabled=True, priority=15, cache_dir=self.cache_dir),

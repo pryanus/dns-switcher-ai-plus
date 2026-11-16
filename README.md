@@ -1,8 +1,13 @@
-# DNS Switcher AI+ 1.1.5
+# DNS Switcher AI+ 1.1.6
 
 Windows-приложение для подбора DNS/SNI-маршрутов к ChatGPT, Gemini, Claude, Spotify, Google Antigravity, Grok, DeepL и другим сервисам. Тёмный интерфейс, избранное, связанные домены и системный трей.
 
 ![Интерфейс](docs/screenshot.png)
+
+## Что нового в 1.1.6
+
+- **Добавлен Geodema DNS (`dns.geodema.love` / `179.236.130.10`, `179.236.130.11`):** работает через DoH с кэшированием и обновлением базы («Обновить базы сейчас»).
+- **Удалён Zapret DNS:** убран из списка провайдеров.
 
 ## Что нового в 1.1.5
 
@@ -25,7 +30,7 @@ Windows-приложение для подбора DNS/SNI-маршрутов к
 
 Portable EXE: [Releases](https://github.com/pryanus/dns-switcher-ai-plus/releases/latest). Установка не требуется; Windows запросит права администратора.
 
-Текущая версия — **1.1.5**.
+Текущая версия — **1.1.6**.
 
 ## Использование
 

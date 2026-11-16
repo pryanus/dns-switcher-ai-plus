@@ -1,6 +1,7 @@
 """
-ZapretDnsProvider: Adapter for Zapret DNS using RFC 8484 DNS-over-HTTPS (DoH).
-DoH Endpoint: https://dns.zapret.moe/dns-query
+GeodemaDnsProvider: Adapter for Geodema Smart DNS using RFC 8484 DNS-over-HTTPS (DoH).
+DoH Endpoint: https://dns.geodema.love/dns-query
+Gateway IPs: 179.236.130.10, 179.236.130.11
 """
 
 import json
@@ -14,18 +15,27 @@ import dns.rdatatype
 from providers.base import BaseProvider, CandidateIP
 
 
-class ZapretDnsProvider(BaseProvider):
-    DOH_URL = "https://dns.zapret.moe/dns-query"
+class GeodemaDnsProvider(BaseProvider):
+    DOH_URL = "https://dns.geodema.love/dns-query"
+    GATEWAY_IPS = ("179.236.130.10", "179.236.130.11")
+    WARMUP_DOMAINS = (
+        "chatgpt.com",
+        "api.openai.com",
+        "claude.ai",
+        "xsts.auth.xboxlive.com",
+        "open.spotify.com",
+        "cursor.com",
+    )
 
     def __init__(
         self,
         enabled: bool = True,
-        priority: int = 12,
+        priority: int = 19,
         cache_dir: Optional[str] = None
     ):
         super().__init__(
-            id="zapret-dns",
-            name="Zapret DNS",
+            id="geodema-dns",
+            name="Geodema DNS",
             enabled=enabled,
             priority=priority,
             cache_dir=cache_dir
@@ -38,7 +48,7 @@ class ZapretDnsProvider(BaseProvider):
         if self.cache_dir:
             p = Path(self.cache_dir)
             p.mkdir(parents=True, exist_ok=True)
-            return p / "zapret_dns.json"
+            return p / "geodema_dns.json"
         return None
 
     def _load_cache(self) -> None:
@@ -60,8 +70,8 @@ class ZapretDnsProvider(BaseProvider):
             }
             cache_p.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
 
-    def resolve_domain_doh(self, domain: str, timeout: float = 3.5) -> List[str]:
-        """Sends an RFC 8484 DoH query to Zapret DNS."""
+    def resolve_domain_doh(self, domain: str, timeout: float = 4.0) -> List[str]:
+        """Sends an RFC 8484 DoH query to Geodema DNS."""
         clean_d = domain.strip().lower()
         query = dns.message.make_query(clean_d, dns.rdatatype.A)
         wire_data = query.to_wire()
@@ -69,7 +79,7 @@ class ZapretDnsProvider(BaseProvider):
         headers = {
             "Content-Type": "application/dns-message",
             "Accept": "application/dns-message",
-            "User-Agent": "DNS-Switcher/1.0"
+            "User-Agent": "DNS-Switcher/1.1"
         }
 
         try:
@@ -87,41 +97,49 @@ class ZapretDnsProvider(BaseProvider):
                         for item in rrset:
                             ips.append(item.address)
                 if ips:
+                    self.last_error = None
                     self._ip_cache[clean_d] = ips
                     self._save_cache()
+                else:
+                    self.last_error = "Geodema DNS не вернул A-запись для " + clean_d
                 return ips
-            else:
-                self.last_error = f"HTTP {resp.status_code}"
-                return []
+            self.last_error = f"HTTP {resp.status_code} от Geodema DNS"
         except Exception as e:
             self.last_error = str(e)
-            return []
+        return []
 
     def fetch_candidates(self, domain: str) -> List[CandidateIP]:
         if not self.enabled:
             return []
 
         clean_d = domain.strip().lower()
-        # Check cache first
-        cached_ips = self._ip_cache.get(clean_d, [])
-
-        # If not in cache or user is querying, attempt DoH query
-        resolved_ips = self.resolve_domain_doh(clean_d) or cached_ips
+        cached = self._ip_cache.get(clean_d, [])
+        ips = list(self.resolve_domain_doh(clean_d) or cached)
+        if any(ip in self.GATEWAY_IPS for ip in ips):
+            for gw_ip in self.GATEWAY_IPS:
+                if gw_ip not in ips:
+                    ips.append(gw_ip)
 
         results = []
-        for ip in resolved_ips:
+        for ip in ips:
+            if ip in ("0.0.0.0", "127.0.0.1"):
+                continue
             results.append(CandidateIP(
                 ip=ip,
                 provider_id=self.id,
                 provider_name=self.name,
-                region="EU/Global"
+                region="UK"
             ))
         return results
 
     def update_database(self) -> bool:
-        """Verifies endpoint health and updates cache timestamp."""
-        test_ips = self.resolve_domain_doh("chatgpt.com")
-        if test_ips:
+        """Refreshes cached Geodema DoH mappings and tests connectivity."""
+        domains = list(dict.fromkeys(list(self.WARMUP_DOMAINS) + list(self._ip_cache.keys())))
+        updated_any = False
+        for domain in domains[:20]:
+            if self.resolve_domain_doh(domain):
+                updated_any = True
+        if updated_any:
             self.last_updated = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             self._save_cache()
             return True
