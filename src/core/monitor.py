@@ -506,6 +506,7 @@ class DatabaseUpdateWorker(QThread):
 
 class BackgroundMonitorThread(QThread):
     service_alert = Signal(str, str, str)
+    service_updated = Signal(str, object, str)
 
     def __init__(self, catalog, hosts_manager, provider_manager, storage, parent=None):
         super().__init__(parent)
@@ -513,8 +514,10 @@ class BackgroundMonitorThread(QThread):
         self.provider_manager, self.storage = provider_manager, storage
         self._stop = Event()
         self._worker = None
-        self._next_check = 0
-        self._next_update = 0
+        now = time.monotonic()
+        self._last_check_at = now
+        self._next_update = now + 30
+        self._was_monitoring_enabled = bool(storage.config.monitoring_enabled)
 
     def stop(self):
         self._stop.set()
@@ -540,9 +543,8 @@ class BackgroundMonitorThread(QThread):
                 try:
                     token = Cancellation()
                     token.event = self._stop
-                    results = parallel([None], lambda _: self.provider_manager.update_all_databases(),
-                                       token, timeout=12)
-                    if results[0] and any(results[0].values()):
+                    results = self.provider_manager.update_all_databases(token)
+                    if results and any(results.values()):
                         config.last_db_update = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
                         self.storage.save_config()
                 except Cancelled:
@@ -550,13 +552,34 @@ class BackgroundMonitorThread(QThread):
                 finally:
                     self.provider_manager.operation_lock.release()
             self._next_update = time.monotonic() + 300
-        if config.monitoring_enabled and time.monotonic() >= self._next_check and not self._stop.is_set():
-            self._worker = VerificationWorker(self.catalog.list_favorites(), self.hosts_manager,
-                self.provider_manager, self.storage, config.auto_fix_favorites)
-            self._worker.service_result.connect(lambda sid, result, provider:
-                self.service_alert.emit(sid, result.status.value, result.details), Qt.DirectConnection)
-            if self._stop.is_set():
-                self._worker.cancel()
-            self._worker.run()
-            self._worker = None
-            self._next_check = time.monotonic() + max(60, config.monitor_interval_minutes * 60)
+
+        if not config.monitoring_enabled:
+            self._was_monitoring_enabled = False
+            self._last_check_at = time.monotonic()
+            return
+
+        if not self._was_monitoring_enabled:
+            self._was_monitoring_enabled = True
+            self._last_check_at = 0.0
+
+        interval = max(60, config.monitor_interval_minutes * 60)
+        if time.monotonic() - self._last_check_at >= interval and not self._stop.is_set():
+            if not self.provider_manager.operation_lock.acquire(blocking=False):
+                self._last_check_at = time.monotonic() - interval + 10
+                return
+            try:
+                self._worker = VerificationWorker(
+                    self.catalog.list_favorites(),
+                    self.hosts_manager,
+                    self.provider_manager,
+                    self.storage,
+                    config.auto_fix_favorites,
+                )
+                self._worker.service_result.connect(self.service_updated.emit, Qt.DirectConnection)
+                if self._stop.is_set():
+                    self._worker.cancel()
+                self._worker.run()
+            finally:
+                self._worker = None
+                self._last_check_at = time.monotonic()
+                self.provider_manager.operation_lock.release()

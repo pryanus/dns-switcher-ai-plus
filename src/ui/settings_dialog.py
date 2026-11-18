@@ -233,10 +233,15 @@ class SettingsDialog(QDialog):
         self.tray_cb.toggled.connect(self._on_tray_toggled)
         gen_layout.addWidget(self.tray_cb)
 
-        self.autostart_cb = QCheckBox("Запуск вместе с Windows (автозагрузка)", self)
-        self.autostart_cb.setChecked(False)
-        self.autostart_cb.setEnabled(False)
-        self.autostart_cb.setToolTip("Автозагрузка пока не настроена; используйте ярлык Windows.")
+        self.autostart_cb = QCheckBox("Запуск вместе с Windows (от администратора, в трей)", self)
+        import os
+        from core.autostart import is_autostart_enabled
+        autostart_active = is_autostart_enabled() if os.name == "nt" else bool(self.storage.config.autostart)
+        self.autostart_cb.setChecked(autostart_active)
+        self.autostart_cb.setEnabled(os.name == "nt")
+        self.autostart_cb.setToolTip(
+            "Запуск свёрнутым в трей при входе в Windows от имени администратора (через Планировщик заданий, без окна UAC)."
+        )
         self.autostart_cb.toggled.connect(self._on_autostart_toggled)
         gen_layout.addWidget(self.autostart_cb)
 
@@ -374,6 +379,15 @@ class SettingsDialog(QDialog):
         self.storage.save_config()
 
     def _on_autostart_toggled(self, checked: bool) -> None:
+        from PySide6.QtCore import QSignalBlocker
+        from core.autostart import set_autostart
+        try:
+            set_autostart(checked)
+        except Exception as error:
+            with QSignalBlocker(self.autostart_cb):
+                self.autostart_cb.setChecked(not checked)
+            QMessageBox.warning(self, "Автозапуск", str(error))
+            return
         self.storage.config.autostart = checked
         self.storage.save_config()
 

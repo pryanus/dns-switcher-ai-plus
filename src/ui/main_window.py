@@ -248,11 +248,20 @@ class MainWindow(QMainWindow):
             storage=self.storage,
             parent=self
         )
-        self.monitor_thread.service_alert.connect(self._on_monitor_alert)
+        self.monitor_thread.service_updated.connect(self._on_monitor_service_result)
         self.monitor_thread.start()
 
+    def _on_monitor_service_result(self, service_id: str, result: VerificationResult, prov_name: str) -> None:
+        self._session_results[service_id] = (result, prov_name)
+        service = self.catalog.get_service(service_id)
+        if service and getattr(result, 'applied', False):
+            target = result.ip or 'Системный DNS (без hosts)'
+            self.note_label.setText(f'{service.name}: авто-маршрут {prov_name} · {target}')
+        card = self.service_cards.get(service_id)
+        if card:
+            card.set_verification_result(result, provider_name=prov_name)
+
     def _on_monitor_alert(self, s_name: str, status: str, details: str) -> None:
-        self.tray.notify(f"DNS Switcher AI+: {s_name}", f"{status}\n{details}")
         self._populate_services()
 
     def _populate_services(self) -> None:
@@ -530,15 +539,6 @@ class MainWindow(QMainWindow):
         if summary.get('cancelled'):
             self.note_label.setText('Проверка отменена. Уже завершённые применения сохраняются.')
             return
-        msg = (
-            f"Проверка завершена!\n"
-            f"Всего проверено: {summary.get('total', 0)}\n"
-            f"Сетевые проверки: {summary.get('ok', 0)}\n"
-            f"Применено маршрутов: {summary.get('fixed', 0)}\n"
-            f"Требуют внимания: {summary.get('failed', 0)}"
-        )
-        if not (self.active_worker and getattr(self.active_worker, "silent", False)):
-            self.tray.notify("DNS Switcher AI+: Итоги проверки", msg)
 
     def _cancel_worker(self) -> None:
         if self.active_worker:
@@ -625,10 +625,6 @@ class MainWindow(QMainWindow):
         if self.storage.config.minimize_to_tray:
             event.ignore()
             self.hide()
-            self.tray.notify(
-                "DNS Switcher AI+ свернут",
-                "Программа продолжает работу в системном трее."
-            )
         else:
             self._exit_app()
 

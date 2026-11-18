@@ -85,13 +85,48 @@ class ElevationHelper:
             return False
 
     @staticmethod
+    def run_elevated_powershell(script: str) -> bool:
+        """Runs a hidden PowerShell script with UAC elevation and waits for exit code 0."""
+        encoded = base64.b64encode(script.encode('utf-16le')).decode('ascii')
+        cmd_params = '-NoProfile -NonInteractive -WindowStyle Hidden -EncodedCommand ' + encoded
+
+        SEE_MASK_NOCLOSEPROCESS = 0x00000040
+        SW_HIDE = 0
+
+        sei = SHELLEXECUTEINFO()
+        sei.cbSize = ctypes.sizeof(SHELLEXECUTEINFO)
+        sei.fMask = SEE_MASK_NOCLOSEPROCESS
+        sei.lpVerb = "runas"
+        sei.lpFile = str(Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32/WindowsPowerShell/v1.0/powershell.exe")
+        sei.lpParameters = cmd_params
+        sei.nShow = SW_HIDE
+
+        ctypes.windll.shell32.ShellExecuteExW.argtypes = [ctypes.POINTER(SHELLEXECUTEINFO)]
+        ctypes.windll.shell32.ShellExecuteExW.restype = wintypes.BOOL
+        if not ctypes.windll.shell32.ShellExecuteExW(ctypes.byref(sei)):
+            return False
+
+        if sei.hProcess:
+            kernel = ctypes.windll.kernel32
+            kernel.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+            kernel.WaitForSingleObject.restype = wintypes.DWORD
+            kernel.GetExitCodeProcess.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)]
+            kernel.GetExitCodeProcess.restype = wintypes.BOOL
+            kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+            wait_result = kernel.WaitForSingleObject(sei.hProcess, 0xFFFFFFFF)
+            exit_code = wintypes.DWORD()
+            received = kernel.GetExitCodeProcess(sei.hProcess, ctypes.byref(exit_code))
+            kernel.CloseHandle(sei.hProcess)
+            return wait_result == 0 and bool(received) and exit_code.value == 0
+
+        return False
+
+    @staticmethod
     def copy_file_elevated(src: str, dst: str, flush_dns: bool = True) -> bool:
         """
         Copies src to dst with UAC elevation prompt if not already running as admin.
         Optionally flushes Windows DNS cache upon success.
         """
-        import shutil
-
         def quoted(value):
             return "'" + str(Path(value).resolve()).replace("'", "''") + "'"
 
@@ -113,39 +148,4 @@ class ElevationHelper:
             + flush + " exit 0 } catch { exit 1 } finally { "
             f"if (Test-Path -LiteralPath {quoted(temporary)}) {{ Remove-Item -LiteralPath {quoted(temporary)} -Force }} }}"
         )
-        encoded = base64.b64encode(script.encode('utf-16le')).decode('ascii')
-        cmd_params = '-NoProfile -NonInteractive -WindowStyle Hidden -EncodedCommand ' + encoded
-
-        SEE_MASK_NOCLOSEPROCESS = 0x00000040
-        SW_HIDE = 0
-
-        sei = SHELLEXECUTEINFO()
-        sei.cbSize = ctypes.sizeof(SHELLEXECUTEINFO)
-        sei.fMask = SEE_MASK_NOCLOSEPROCESS
-        sei.lpVerb = "runas"
-        sei.lpFile = str(Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32/WindowsPowerShell/v1.0/powershell.exe")
-        sei.lpParameters = cmd_params
-        sei.nShow = SW_HIDE
-
-        # Trigger UAC elevation prompt
-        ctypes.windll.shell32.ShellExecuteExW.argtypes = [ctypes.POINTER(SHELLEXECUTEINFO)]
-        ctypes.windll.shell32.ShellExecuteExW.restype = wintypes.BOOL
-        if not ctypes.windll.shell32.ShellExecuteExW(ctypes.byref(sei)):
-            # User clicked "No" on UAC prompt or elevation was blocked
-            return False
-
-        if sei.hProcess:
-            kernel = ctypes.windll.kernel32
-            kernel.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
-            kernel.WaitForSingleObject.restype = wintypes.DWORD
-            kernel.GetExitCodeProcess.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)]
-            kernel.GetExitCodeProcess.restype = wintypes.BOOL
-            kernel.CloseHandle.argtypes = [wintypes.HANDLE]
-            # Ожидаем подтверждённый результат записи, без ложного успеха по таймауту.
-            wait_result = kernel.WaitForSingleObject(sei.hProcess, 0xFFFFFFFF)
-            exit_code = wintypes.DWORD()
-            received = kernel.GetExitCodeProcess(sei.hProcess, ctypes.byref(exit_code))
-            kernel.CloseHandle(sei.hProcess)
-            return wait_result == 0 and bool(received) and exit_code.value == 0
-
-        return False
+        return ElevationHelper.run_elevated_powershell(script)
