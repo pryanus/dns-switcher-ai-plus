@@ -28,7 +28,7 @@ class AppConfig:
         custom_services: Optional[List[Dict]] = None,
         custom_providers: Optional[List[Dict]] = None,
         active_routes: Optional[Dict[str, Dict]] = None,
-        catalog_revision: int = 10,
+        catalog_revision: int = 11,
         hidden_services=None,
         rejected_routes=None
     ):
@@ -43,6 +43,7 @@ class AppConfig:
             "geohide-us": True,
             "malw-dns": True,
             "geodema-dns": True,
+            "zapret-dns": True,
             "dns-ai": True,
             "cloudflare-dns": True,
             "quad9-dns": True,
@@ -175,6 +176,10 @@ class StorageManager:
             self.config.providers_enabled.pop('zapret-dns', None)
             self.config.providers_enabled.setdefault('geodema-dns', True)
             self.config.catalog_revision = 10
+            self.save_config()
+        if self.config.catalog_revision < 11:
+            self.config.providers_enabled['zapret-dns'] = True
+            self.config.catalog_revision = 11
             self.save_config()
 
     def load_config(self) -> AppConfig:

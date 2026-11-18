@@ -124,6 +124,7 @@ class TestProviders(unittest.TestCase):
         with patch.object(GeoHideProvider, 'fetch_candidates', return_value=[CandidateIP('1.1.1.1', 'geohide-ru', 'GeoHide')]), \
              patch('providers.malw.MalwDnsProvider.fetch_candidates', return_value=[]), \
              patch('providers.geodema.GeodemaDnsProvider.fetch_candidates', return_value=[]), \
+             patch('providers.zapret.ZapretDnsProvider.fetch_candidates', return_value=[]), \
              patch('providers.dns_ai.DnsAiProvider.fetch_candidates', return_value=[]), \
              patch.object(CustomProvider, '_resolve_doh', return_value=[]):
             cands = manager.get_candidates("example.com")
@@ -146,10 +147,13 @@ class TestProviders(unittest.TestCase):
         self.assertEqual(cands[0].ip, "198.51.100.1")
         self.assertEqual(cands[0].provider_name, "My Custom")
 
-    def test_geodema_provider_replaces_zapret_and_updates_db(self):
+    def test_geodema_and_zapret_providers_are_registered_and_update_db(self):
         from providers.geodema import GeodemaDnsProvider
+        from providers.zapret import ZapretDnsProvider
+        from core.verifier import ServiceVerifier, ServiceStatus
         manager = ProviderManager()
-        self.assertIsNone(manager.get_provider('zapret-dns'))
+        zapret = manager.get_provider('zapret-dns')
+        self.assertIsInstance(zapret, ZapretDnsProvider)
         geodema = manager.get_provider('geodema-dns')
         self.assertIsInstance(geodema, GeodemaDnsProvider)
         with patch.object(geodema, 'resolve_domain_doh', return_value=['179.236.130.10']):
@@ -160,6 +164,24 @@ class TestProviders(unittest.TestCase):
         with patch.object(geodema, 'resolve_domain_doh', return_value=['142.251.153.2']):
             ips = [c.ip for c in geodema.fetch_candidates('gemini.google.com')]
             self.assertEqual(ips, ['142.251.153.2'])
+        with patch.object(zapret, 'resolve_domain_doh', return_value=['161.104.89.59']):
+            self.assertEqual([c.ip for c in zapret.fetch_candidates('gemini.google.com')], ['161.104.89.59'])
+            self.assertTrue(zapret.update_database())
+            self.assertIsNotNone(zapret.last_updated)
+        with patch('socket.socket'), patch('ssl.create_default_context') as ctx:
+            ctx.return_value.wrap_socket.return_value.recv.side_effect = [
+                b'HTTP/1.1 403 Forbidden\r\n\r\n{"error":{"code":403,"message":"Permission denied on the service."}}',
+                b''
+            ]
+            ok_res = ServiceVerifier.verify_candidate('161.104.89.59', 'generativelanguage.googleapis.com', path='/v1beta/models', accepted_codes=(401,))
+            self.assertEqual(ok_res.status, ServiceStatus.OK)
+        with patch('socket.socket'), patch('ssl.create_default_context') as ctx:
+            ctx.return_value.wrap_socket.return_value.recv.side_effect = [
+                b'HTTP/1.1 403 Forbidden\r\n\r\n{"error":{"code":403,"message":"User location is not supported for the API use."}}',
+                b''
+            ]
+            geo_res = ServiceVerifier.verify_candidate('161.104.89.59', 'generativelanguage.googleapis.com', path='/v1beta/models', accepted_codes=(401,))
+            self.assertEqual(geo_res.status, ServiceStatus.DEAD)
 
 
 if __name__ == "__main__":

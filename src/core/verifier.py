@@ -209,7 +209,8 @@ class ServiceVerifier:
                     b'<code>publicaccessnotpermitted</code>', b'<code>authorizationfailure</code>')):
                 return result(ServiceStatus.OK, 'Хранилище отвечает; загрузку с подписью проверьте в ChatGPT', code)
             if code == 403 and clean_domain.endswith(('.googleapis.com', '.clients6.google.com')) and (
-                b'unregistered callers' in lower or b'api_key_invalid' in lower):
+                b'unregistered callers' in lower or b'api_key_invalid' in lower
+                or b'permission denied on the service' in lower):
                 return result(ServiceStatus.OK, 'API отвечает; для запроса требуется сессия или ключ', code)
             if code in (200, 204) or (code in accepted_codes and code not in (301, 302, 303, 307, 308)):
                 return result(ServiceStatus.OK, f"HTTPS отвечает (HTTP {code})", code)

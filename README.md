@@ -1,8 +1,13 @@
-# DNS Switcher AI+ 1.1.7
+# DNS Switcher AI+ 1.1.8
 
 Windows-приложение для подбора DNS/SNI-маршрутов к ChatGPT, Gemini, Claude, Spotify, Google Antigravity, Grok, DeepL и другим сервисам. Тёмный интерфейс, избранное, связанные домены и системный трей.
 
 ![Интерфейс](docs/screenshot.png)
+
+## Что нового в 1.1.8
+
+- **Возвращён обновлённый `Zapret DNS` (`https://dns.zapret.moe/dns-query`):** подключён с актуальной архитектурой (московский вход `161.104.89.59` → зарубежный узел, кэширование и обновление базы, работает с Gemini, ChatGPT API, Spotify, Xbox, DeepL, Cursor).
+- **Исправлена проверка `generativelanguage.googleapis.com` для Gemini:** ответ Google `HTTP 403 Permission denied on the service` (без API-ключа) теперь корректно распознаётся как рабочий доступ к API, тогда как реальный гео-блок (`user location is not supported`) по-прежнему отклоняется.
 
 ## Что нового в 1.1.7
 
@@ -35,7 +40,7 @@ Windows-приложение для подбора DNS/SNI-маршрутов к
 
 Portable EXE: [Releases](https://github.com/pryanus/dns-switcher-ai-plus/releases/latest). Установка не требуется; Windows запросит права администратора.
 
-Текущая версия — **1.1.7**.
+Текущая версия — **1.1.8**.
 
 ## Использование
 
